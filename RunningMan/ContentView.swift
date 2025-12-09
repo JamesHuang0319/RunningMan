@@ -249,13 +249,11 @@ struct ContentView: View {
 
             // 2. 配置请求
             let request = MKDirections.Request()
-            request.source = MKMapItem(
-                placemark: .init(coordinate: userLocation)
-            )
+            request.source = MKMapItem.forCurrentLocation()
             request.destination = MKMapItem(
                 placemark: .init(coordinate: destination)
             )
-            request.transportType = .walking
+            request.transportType = .any
 
             // 🖨️【调试开始】打印请求参数
             print("\n-------- 🚀 发起导航请求 --------")
