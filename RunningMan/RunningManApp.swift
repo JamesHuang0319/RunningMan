@@ -9,9 +9,28 @@ import SwiftUI
 
 @main
 struct RunningManApp: App {
+    @State private var game = GameManager()
+    @State private var auth = AuthStore()
+    @State private var profileStore = ProfileStore()
+
+    init() {
+        DLog.enabled = true
+        DLog.info("App launched")
+    }
+
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            AuthGateView()
+                .environment(game)
+                .environment(auth)
+                .environment(profileStore)
+                .onOpenURL { url in
+                    print("✅ onOpenURL:", url.absoluteString)
+                    Task { await auth.handleOpenURL(url) }
+                }
         }
     }
 }
+
+
+
