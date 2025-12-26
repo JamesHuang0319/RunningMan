@@ -1,26 +1,14 @@
 //
-//  PlayerModel.swift
+//  Player.swift
 //  RunningMan
 //
-//  Created by 黄名靖 on 2025/12/9.
+//  Created by 黄名靖 on 2025/12/25.
 //
+
 
 import Foundation
 import CoreLocation
 
-// 游戏角色
-enum GameRole: String, Codable, CaseIterable {
-    case hunter = "👻 鬼"
-    case runner = "🏃 人"
-    case spectator = "👀 观众"
-}
-
-// 玩家状态
-enum PlayerStatus: String, Codable {
-    case active = "游戏中"
-    case caught = "被抓了"
-    case offline = "离线"
-}
 
 // 核心玩家模型
 struct Player: Identifiable, Equatable {
