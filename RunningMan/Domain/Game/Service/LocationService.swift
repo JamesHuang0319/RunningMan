@@ -23,6 +23,7 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
     override init() {
         super.init()
         locationManager.delegate = self
+        locationManager.desiredAccuracy = kCLLocationAccuracyBestForNavigation
         authorizationStatus = locationManager.authorizationStatus
         refreshMessageFromAuth()
     }
@@ -67,8 +68,16 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
                     }
 
                     if let location = update.location {
+                        // ✅ 修改点：在这里进行坐标转换
+                        // 硬件返回的是 WGS-84，我们转为 GCJ-02 后再更新给 UI 和业务
+                        let gcjLocation = LocationUtils.wgs84ToGcj02(
+                            lat: location.coordinate.latitude,
+                            lon: location.coordinate.longitude
+                        )
+
                         await MainActor.run {
-                            self.currentLocation = location.coordinate
+                            // 现在 currentLocation 持有的是纠偏后的火星坐标
+                            self.currentLocation = gcjLocation
                         }
                     }
                 }
@@ -76,7 +85,8 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
                 // 正常取消
             } catch {
                 await MainActor.run {
-                    self.lastErrorMessage = "❌ 定位服务出错：\(error.localizedDescription)"
+                    self.lastErrorMessage =
+                        "❌ 定位服务出错：\(error.localizedDescription)"
                 }
             }
         }
@@ -85,6 +95,37 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
     func stop() {
         locationTask?.cancel()
         locationTask = nil
+    }
+
+    // MARK: - ✅ NEW: One-shot location for UI (不会影响 start() 的持续更新)
+    /// 只取一次位置（用于像 EntranceView 这种：打开时锁定地图中心）
+    /// - 不会停止你现有的 liveUpdates 任务
+    /// - 如果当前已有 currentLocation，会直接返回，避免额外等待
+    func requestOneShotLocation(timeoutSeconds: Double = 3.0) async
+        -> CLLocationCoordinate2D?
+    {
+        if let cached = currentLocation { return cached }
+        guard canUseLocation else { return nil }
+
+        do {
+            var iterator = CLLocationUpdate.liveUpdates().makeAsyncIterator()
+            let deadline = Date().addingTimeInterval(timeoutSeconds)
+
+            while Date() < deadline {
+                if let update = try await iterator.next(),
+                    let loc = update.location
+                {
+                    // ✅ 修改点：OneShot 也要转换，保持一致
+                    return LocationUtils.wgs84ToGcj02(
+                        lat: loc.coordinate.latitude,
+                        lon: loc.coordinate.longitude
+                    )
+                }
+            }
+            return nil
+        } catch {
+            return nil
+        }
     }
 
     // MARK: - CLLocationManagerDelegate (最稳的权限变化监听)
@@ -131,7 +172,8 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
     private func consumeDiagnosticsIfAvailable(_ update: CLLocationUpdate) {
         if #available(iOS 18.0, *) {
             // 注意：这些并不等于“授权状态”，而是更细的诊断原因
-            if update.authorizationDenied || update.authorizationDeniedGlobally {
+            if update.authorizationDenied || update.authorizationDeniedGlobally
+            {
                 lastErrorMessage = "定位权限被拒绝：请到系统设置中开启定位权限。"
             } else if update.authorizationRestricted {
                 lastErrorMessage = "定位权限受限：可能由系统策略限制。"
@@ -152,7 +194,66 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
             }
         }
     }
+
 }
 
+struct LocationUtils {
 
+    static let a = 6378245.0
+    static let ee = 0.00669342162296594329
 
+    /// 将 WGS-84 (国际标准/硬件GPS) 转换为 GCJ-02 (火星坐标/高德/腾讯/国内AppleMap)
+    static func wgs84ToGcj02(lat: Double, lon: Double) -> CLLocationCoordinate2D
+    {
+        if outOfChina(lat: lat, lon: lon) {
+            return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+        }
+
+        var dLat = transformLat(x: lon - 105.0, y: lat - 35.0)
+        var dLon = transformLon(x: lon - 105.0, y: lat - 35.0)
+        let radLat = lat / 180.0 * .pi
+        var magic = sin(radLat)
+        magic = 1 - ee * magic * magic
+        let sqrtMagic = sqrt(magic)
+
+        dLat = (dLat * 180.0) / ((a * (1 - ee)) / (magic * sqrtMagic) * .pi)
+        dLon = (dLon * 180.0) / (a / sqrtMagic * cos(radLat) * .pi)
+
+        return CLLocationCoordinate2D(
+            latitude: lat + dLat,
+            longitude: lon + dLon
+        )
+    }
+
+    /// 简易判断是否在中国境外
+    static func outOfChina(lat: Double, lon: Double) -> Bool {
+        if lon < 72.004 || lon > 137.8347 { return true }
+        if lat < 0.8293 || lat > 55.8271 { return true }
+        return false
+    }
+
+    private static func transformLat(x: Double, y: Double) -> Double {
+        var ret =
+            -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2
+            * sqrt(abs(x))
+        ret +=
+            (20.0 * sin(6.0 * x * .pi) + 20.0 * sin(2.0 * x * .pi)) * 2.0 / 3.0
+        ret += (20.0 * sin(y * .pi) + 40.0 * sin(y / 3.0 * .pi)) * 2.0 / 3.0
+        ret +=
+            (160.0 * sin(y / 12.0 * .pi) + 320 * sin(y * .pi / 30.0)) * 2.0
+            / 3.0
+        return ret
+    }
+
+    private static func transformLon(x: Double, y: Double) -> Double {
+        var ret =
+            300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * sqrt(abs(x))
+        ret +=
+            (20.0 * sin(6.0 * x * .pi) + 20.0 * sin(2.0 * x * .pi)) * 2.0 / 3.0
+        ret += (20.0 * sin(x * .pi) + 40.0 * sin(x / 3.0 * .pi)) * 2.0 / 3.0
+        ret +=
+            (150.0 * sin(x / 12.0 * .pi) + 300.0 * sin(x / 30.0 * .pi)) * 2.0
+            / 3.0
+        return ret
+    }
+}

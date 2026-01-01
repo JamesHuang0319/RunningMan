@@ -9,6 +9,7 @@ import SwiftUI
 
 struct AuthGateView: View {
     @Environment(AuthStore.self) private var auth
+    @Environment(GameStore.self) private var game
 
     var body: some View {
         Group {
@@ -16,10 +17,27 @@ struct AuthGateView: View {
                 ProgressView("正在恢复登录…")
             } else if auth.isAuthenticated {
                 RootView()
+//                NavigationStack {
+//                    RootView()
+//                        .toolbar {
+//                            #if DEBUG
+//                                ToolbarItem(placement: .topBarTrailing) {
+//                                    NavigationLink("P0 Test") {
+//                                        RoomDebugView()
+//                                    }
+//                                }
+//                            #endif
+//                        }
+//                }
+                .task {
+                    game.meId = auth.userId
+                    DLog.ok(
+                        "AuthGate injected game.meId=\(auth.userId?.uuidString ?? "-")"
+                    )
+                }
             } else {
                 AuthView()
             }
         }
     }
 }
-

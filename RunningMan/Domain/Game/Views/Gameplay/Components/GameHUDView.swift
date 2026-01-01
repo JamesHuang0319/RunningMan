@@ -9,7 +9,7 @@
 import SwiftUI
 
 struct GameHUDView: View {
-    @Environment(GameManager.self) var game
+    @Environment(GameStore.self) var game
 
     var body: some View {
         HStack(alignment: .top) {
@@ -31,7 +31,7 @@ struct GameHUDView: View {
 
             VStack(alignment: .trailing, spacing: 10) {
                 // 角色胶囊
-                Text(game.currentUser.role.rawValue)
+                Text(game.me?.role.rawValue ?? "未登录")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.primary)
                     .padding(.horizontal, 10)

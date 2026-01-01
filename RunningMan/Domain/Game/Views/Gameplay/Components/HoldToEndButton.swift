@@ -4,84 +4,104 @@
 //
 //  Created by 黄名靖 on 2025/12/14.
 //
-
-//Views/Gameplay/Components/HoldToEndButton.swift
 import SwiftUI
+
 struct HoldToEndButton: View {
-    var holdDuration: Double = 1.2
-    var action: () -> Void
+    var holdDuration: Double = 1.5
+    var action: () async -> Void
 
     @State private var isPressing = false
-    @State private var pressFeedbackTrigger = false
-    @State private var finishFeedbackTrigger = false
-    @State private var timer: Task<Void, Never>?
+    @State private var progress: CGFloat = 0
+    @State private var timerTask: Task<Void, Never>?
+
+    private let impactHeavy = UIImpactFeedbackGenerator(style: .heavy)
+    private let impactLight = UIImpactFeedbackGenerator(style: .light)
 
     var body: some View {
         ZStack {
-            Circle().fill(.thinMaterial)
-
+            // 底层：统一 64*64 的浮层按钮底盘（干净）
             Circle()
-                .trim(from: 0, to: isPressing ? 1 : 0)
-                .stroke(.red.opacity(0.9),
-                        style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    Circle().strokeBorder(.white.opacity(0.18), lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(0.12), radius: 8, y: 4)
+
+            // 长按进度环：按住才显示（不抢戏）
+            Circle()
+                .trim(from: 0, to: progress)
+                .stroke(
+                    Color.red,
+                    style: StrokeStyle(lineWidth: 4, lineCap: .round)
+                )
                 .rotationEffect(.degrees(-90))
-                .padding(6)
-                .animation(.linear(duration: holdDuration), value: isPressing)
+                .opacity(isPressing ? 1 : 0)
+                .animation(.easeOut(duration: 0.12), value: isPressing)
 
-            Image(systemName: "stop.fill")
-                .font(.system(size: 14, weight: .bold))
-                .foregroundStyle(.red)
+            // 图标：常态中性，按住变红
+            Image(systemName: isPressing ? "stop.circle.fill" : "stop.fill")
+                .font(.system(size: 23, weight: .semibold))
+                .foregroundStyle(isPressing ? Color.red : Color.primary.opacity(0.85))
+                .animation(.easeOut(duration: 0.12), value: isPressing)
         }
-        .frame(width: 44, height: 44)
-        .overlay(Circle().stroke(.white.opacity(0.18), lineWidth: 1))
-        .shadow(radius: 8, y: 3)
+        .frame(width: 64, height: 64)               // ✅ 固定 64*64
+        .scaleEffect(isPressing ? 0.96 : 1.0)       // 按下轻微缩放
+        .animation(.spring(response: 0.25, dampingFraction: 0.85), value: isPressing)
         .contentShape(Circle())
-
-        // ✅ 用 DragGesture 精确拿到“按下/松开”
+        .onAppear {
+            impactHeavy.prepare()
+            impactLight.prepare()
+        }
         .gesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { _ in
-                    guard !isPressing else { return }
-                    isPressing = true
-                    pressFeedbackTrigger.toggle()
-
-                    // 开始一个可取消的计时任务：按满才触发
-                    timer?.cancel()
-                    timer = Task { @MainActor in
-                        try? await Task.sleep(nanoseconds: UInt64(holdDuration * 1_000_000_000))
-                        // 如果这时仍在按住，触发
-                        if isPressing {
-                            finishFeedbackTrigger.toggle()
-                            action()
-                            isPressing = false
-                        }
-                    }
+                    if !isPressing { startPress() }
                 }
                 .onEnded { _ in
-                    // 松手：取消计时并复位
-                    timer?.cancel()
-                    isPressing = false
+                    cancelPress()
                 }
         )
-//        .sensoryFeedback(.impact(weight: .light), trigger: pressFeedbackTrigger)
-//        .sensoryFeedback(.impact(weight: .heavy), trigger: finishFeedbackTrigger)
-        .accessibilityLabel("按住结束游戏")
+        .accessibilityLabel("结束跑步")
+        .accessibilityHint("长按确认结束")
+    }
+
+    private func startPress() {
+        isPressing = true
+        progress = 0
+        impactLight.impactOccurred()
+
+        timerTask?.cancel()
+        timerTask = Task { @MainActor in
+            let start = Date()
+            while !Task.isCancelled {
+                let t = Date().timeIntervalSince(start)
+                let p = min(1, t / holdDuration)
+                progress = CGFloat(p)
+
+                if p >= 1 {
+                    finishPress()
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 16_000_000) // ~60fps
+            }
+        }
+    }
+
+    private func cancelPress() {
+        timerTask?.cancel()
+        timerTask = nil
+        isPressing = false
+        withAnimation(.easeOut(duration: 0.15)) {
+            progress = 0
+        }
+    }
+
+    private func finishPress() {
+        timerTask?.cancel()
+        timerTask = nil
+        isPressing = false
+        progress = 0
+        impactHeavy.impactOccurred()
+        Task { await action() }
     }
 }
-
-
-#Preview("HoldToEndButton Position Test") {
-    ZStack {
-        Color.gray.opacity(0.15).ignoresSafeArea()
-
-        HoldToEndButton(holdDuration: 1.2) {}
-            .padding(.trailing, 20)
-            .padding(.bottom, 80)
-            .frame(
-                maxWidth: .infinity,
-                maxHeight: .infinity,
-                alignment: .bottomTrailing
-            )
-    }
-}
-

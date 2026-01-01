@@ -13,7 +13,7 @@ import Supabase
 @Observable
 final class AuthStore {
     static let shared = AuthStore()
-    private let supabase = SupabaseService.shared.client
+    private let supabase = SupabaseClientProvider.shared.client
 
     // ✅ App 状态
     var isAuthenticated: Bool = false

@@ -8,14 +8,17 @@
 import SwiftUI
 
 struct GameFlowView: View {
-    @Environment(GameManager.self) var game
+    @Environment(GameStore.self) var game
 
     var body: some View {
         NavigationStack {
             Group {
                 switch game.phase {
                 case .setup:
-                    SetupView()
+                    EntranceView() // 改名：入口视图
+                    .transition(.opacity)
+                case .lobby:
+                    LobbyView()
                 case .playing:
                     MainMapView()
                 case .gameOver:
