@@ -9,6 +9,7 @@
 import SwiftUI
 import Kingfisher
 
+
 struct PlayerAnnotationView: View {
     let player: PlayerDisplay
     let distance: Double

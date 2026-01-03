@@ -7,14 +7,6 @@
 import PhotosUI
 import SwiftUI
 
-// MARK: - Model
-struct AchievementItem: Identifiable, Equatable {
-    let id = UUID()
-    let color: Color
-    let icon: String
-    let name: String
-}
-
 struct ProfileView: View {
     @Environment(AuthStore.self) private var auth
     @Environment(ProfileStore.self) private var profileStore
@@ -31,15 +23,6 @@ struct ProfileView: View {
     @State private var isSavingName = false
 
     @State private var isManagingHonors = false
-    @State private var myAchievements: [AchievementItem] = [
-        AchievementItem(color: .orange, icon: "trophy.fill", name: "首胜"),
-        AchievementItem(
-            color: .purple,
-            icon: "figure.run.circle.fill",
-            name: "疾行者"
-        ),
-        AchievementItem(color: .blue, icon: "bolt.fill", name: "闪电侠"),
-    ]
 
     // ✅ 回退到右图的背景颜色
     private let initialBackground = Color(hex: "F2F4F7")
@@ -214,17 +197,27 @@ struct ProfileView: View {
         .initialCardStyle()  // ✅ 使用还原后的卡片样式
     }
 
-    // MARK: - 2. Stats Section
+    // MARK: - 2. Stats Section (绑定真实数据)
     private var statsSection: some View {
         HStack(spacing: 12) {
-            statItem(title: "场次", value: "0", unit: "场", icon: "flag.checkered")
+            statItem(
+                title: "场次",
+                value: profileStore.totalGamesString,  // ✅ 真实数据
+                unit: "场",
+                icon: "flag.checkered"
+            )
             statItem(
                 title: "胜率",
-                value: "--",
+                value: profileStore.winRateString,  // ✅ 真实数据
                 unit: "%",
                 icon: "chart.line.uptrend.xyaxis"
             )
-            statItem(title: "里程", value: "0.0", unit: "km", icon: "figure.run")
+            statItem(
+                title: "里程",
+                value: profileStore.totalDistanceString,  // ✅ 真实数据
+                unit: "km",
+                icon: "figure.run"
+            )
         }
     }
 
@@ -272,20 +265,24 @@ struct ProfileView: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 20) {  // 稍微增加一点间距
-                    ForEach(myAchievements) { item in
+                    // ✅ 遍历 Store 里的数据
+                    ForEach(profileStore.achievements) { item in
                         AchievementBadge(
                             item: item,
                             isEditing: isManagingHonors,
                             onDelete: {
-                                withAnimation {
-                                    if let index = myAchievements.firstIndex(
-                                        of: item
-                                    ) {
-                                        myAchievements.remove(at: index)
-                                    }
+                                Task {
+                                    await profileStore.removeAchievement(
+                                        item: item
+                                    )
                                 }
                             }
                         )
+                    }
+
+                    // 空状态提示 (可选)
+                    if profileStore.achievements.isEmpty {
+                        Text("暂无荣誉").font(.caption).foregroundStyle(.secondary)
                     }
 
                     // 添加按钮占位
@@ -387,7 +384,7 @@ struct ProfileView: View {
             }
         }
     }
-    
+
     // MARK: - 4. Settings Section
     private var settingsSection: some View {
         VStack(spacing: 0) {
@@ -545,3 +542,4 @@ extension View {
         )
     }
 }
+

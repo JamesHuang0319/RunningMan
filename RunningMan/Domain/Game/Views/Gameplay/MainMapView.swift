@@ -26,7 +26,9 @@ struct MainMapView: View {
     @State private var showRipUI = false
     @State private var targetToRip: PlayerDisplay? = nil
     @State private var showCaptureOverlay = false
-    @State private var captureResult: (Bool, String) = (true, "")  // (isSuccess, message)
+    // 改用新的 AnimationType
+    @State private var captureResult:
+        (CaptureOverlayView.AnimationType, String) = (.hunterCaughtOne, "")
 
     @State private var mySkills: [FruitSkill] = [
         FruitSkill.allSkills[0], FruitSkill.allSkills[1],
@@ -46,14 +48,26 @@ struct MainMapView: View {
             // --- 抓捕结果盖章动画（最上层）---
             if showCaptureOverlay {
                 CaptureOverlayView(
-                    type: captureResult.0 ? .success : .busted,  // ← 改用 type 参数
+                    type: captureResult.0,  // 直接传
                     message: captureResult.1
                 ) {
                     withAnimation {
                         showCaptureOverlay = false
                     }
-                    // 可选：如果你以后需要检查游戏结束，可以在这里加逻辑
-                    // game.checkGameEnd()  // ← 删除这行，因为 GameStore 没有这个方法
+                    // 🚀 关键逻辑：如果是最终胜利/失败，动画结束后跳转 GameOver
+                    if captureResult.0 == .gameVictory
+                        || captureResult.0 == .gameDefeat
+                    {
+                        // 延迟一点点让用户看清 UI 消失
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            // 如果是房主，触发全员结束；如果是普通人，自己跳
+                            if game.isHost {
+                                Task { await game.hostEndGame() }
+                            } else {
+                                // 等待服务器推送状态变成 ended，或者这里不做操作等待 Realtime
+                            }
+                        }
+                    }
                 }
                 .zIndex(999)
                 .transition(.opacity)  // 可加个淡出动画更丝滑
@@ -70,7 +84,9 @@ struct MainMapView: View {
                         Annotation(p.displayName, coordinate: p.coordinate) {
 
                             Button {
-                                DLog.info("👇 [UI] Clicked player: \(p.displayName), dist: \(Int(distance))m") // ✅ 补上日志
+                                DLog.info(
+                                    "👇 [UI] Clicked player: \(p.displayName), dist: \(Int(distance))m"
+                                )  // ✅ 补上日志
                                 // --- 点击逻辑 ---
                                 // 猎人且距离 < 10m -> 触发撕名牌 UI
                                 if distance < 10 && game.meRole == .hunter
@@ -333,13 +349,13 @@ struct MainMapView: View {
     // 统一的抓捕逻辑（原 tryAttemptTag 内容，稍作精简）
     @MainActor
     private func attemptTag(targetId: UUID) async {
-        DLog.info("🚀 [Logic] attemptTag START target=\(targetId)") // ✅ 补上日志
-        
+        DLog.info("🚀 [Logic] attemptTag START target=\(targetId)")
+
         withAnimation { showRipUI = false }
 
         // 基本前置检查
         guard game.phase == .playing else {
-            DLog.warn("🛑 [Logic] blocked: phase is \(game.phase)") // ✅ 补上日志
+            DLog.warn("🛑 [Logic] blocked: phase is \(game.phase)")
             triggerInstruction("❌ 只能在行动阶段抓捕")
             return
         }
@@ -349,45 +365,49 @@ struct MainMapView: View {
         }
 
         do {
-            DLog.info("📡 [Logic] Calling RPC...") // ✅ 补上日志
+            DLog.info("📡 [Logic] Calling RPC...")
             let result = try await game.attemptTag(targetUserId: targetId)
-            DLog.info("✅ [Logic] RPC Result: ok=\(result.ok)") // ✅ 补上日志
-           
+            DLog.info("✅ [Logic] RPC Result: ok=\(result.ok)")
+
+            // 1. 关闭撕名牌 UI
+            withAnimation { showRipUI = false }
 
             if result.ok {
-                // 距离文字
                 let distText =
                     result.dist_m.map { String(format: "%.1f", $0) } ?? "-"
+                let remaining = result.remaining_runners ?? 0
+                // 判断是否游戏结束 (RPC返回了 game_ended 字段，或者剩余人数为0)
+                let isGameEnded = result.game_ended ?? (remaining == 0)
 
-                // 判断是否是最终胜利
-                let isVictory =
-                    (result.remaining_runners ?? 1) <= 0
-                    || result.game_ended == true
-
-                let message: String
-                if isVictory {
-                    message = "最终抓捕成功！\n猎人团队获得胜利！🎉\n距离 \(distText) 米"
-                    // 可选：更强的震动反馈
+                // 2. ✅ 设置正确的弹窗类型和文案
+                if isGameEnded {
+                    // 场景：最终胜利
+                    captureResult = (.gameVictory, "全员逮捕归案！\n猎人阵营大获全胜 🎉")
                     UIImpactFeedbackGenerator(style: .heavy).impactOccurred(
                         intensity: 1.0
                     )
                 } else {
-                    let remaining = result.remaining_runners ?? 0
-                    message = "抓捕成功！\n距离 \(distText) 米｜剩余逃跑者 \(remaining)"
+                    // 场景：普通抓捕
+                    captureResult = (
+                        .hunterCaughtOne,
+                        "抓捕成功！\n距离 \(distText) 米｜剩余目标 \(remaining)"
+                    )
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                 }
 
-                captureResult = (true, message)
+                // 3. 显示弹窗
                 withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) {
                     showCaptureOverlay = true
                 }
             } else {
-                // 失败统一走战术提醒
-                // （将来如果有特殊失败原因，比如被技能反制，可以改成显示 busted 动画）
+                // 失败处理
+                DLog.warn("⚠️ Capture Failed: \(result.reason ?? "unknown")")
                 triggerInstruction(humanizeAttemptTagReason(result))
             }
         } catch {
-            DLog.err("🔥 [Logic] RPC Error: \(error)") // ✅ 补上日志
+            DLog.err("🔥 RPC Error: \(error)")
             triggerInstruction("❌ 抓捕请求失败：\(error.localizedDescription)")
+            withAnimation { showRipUI = false }  // 确保出错也关闭 UI
         }
     }
 

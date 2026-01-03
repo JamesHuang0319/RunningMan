@@ -5,6 +5,7 @@
 //  Created by 黄名靖 on 2025/12/31.
 //
 import SwiftUI
+import MapKit
 
 struct RipNametagView: View {
     let targetName: String
@@ -80,5 +81,29 @@ struct RipNametagView: View {
                     .padding(.bottom, 50)
             }
         }
+    }
+}
+
+
+//
+//  RipNametagView_Previews.swift
+//
+
+#Preview("Rip Nametag") {
+    ZStack {
+        // 模拟地图背景
+        Map()
+            .ignoresSafeArea()
+            .blur(radius: 2) // 模拟背景虚化
+        
+        RipNametagView(
+            targetName: "RunningMan_007",
+            onRip: {
+                print("⚡️ RIPPED!")
+            },
+            onCancel: {
+                print("❌ Cancelled")
+            }
+        )
     }
 }

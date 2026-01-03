@@ -17,18 +17,6 @@ struct AuthGateView: View {
                 ProgressView("正在恢复登录…")
             } else if auth.isAuthenticated {
                 RootView()
-//                NavigationStack {
-//                    RootView()
-//                        .toolbar {
-//                            #if DEBUG
-//                                ToolbarItem(placement: .topBarTrailing) {
-//                                    NavigationLink("P0 Test") {
-//                                        RoomDebugView()
-//                                    }
-//                                }
-//                            #endif
-//                        }
-//                }
                 .task {
                     game.meId = auth.userId
                     DLog.ok(

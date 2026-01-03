@@ -10,7 +10,7 @@ import Foundation
 import CoreLocation
 
 
-// 核心玩家模型
+// UI使用的核心玩家模型
 struct PlayerDisplay: Identifiable, Equatable {
     let id: UUID                 // userId
     let roomId: UUID

@@ -9,8 +9,21 @@ import Foundation
 import Supabase
 
 final class ProfileService {
+    
+    // MARK: - Dependencies
     private let supabase = SupabaseClientProvider.shared.client
     let bucket = "avatars"
+
+    // MARK: - Data Structures
+    
+    /// 用于批量拉取时的返回结构
+    struct ProfileInfo {
+        let name: String
+        let avatarDownloadURL: URL?
+        let avatarPath: String?
+    }
+
+    // MARK: - Helpers
 
     /// ✅ 版本化存储路径： "<uid>/avatar_<unix>.jpg"
     /// - 目的：避免同名覆盖导致 CDN/客户端缓存返回旧图
@@ -19,22 +32,22 @@ final class ProfileService {
         return "\(uid.uuidString.lowercased())/avatar_\(v).jpg"
     }
 
-    // MARK: - Fetch profile
+    // MARK: - Profile Core (Fetch & Upsert)
 
-    /// 拉取 profile
-    /// - 只有「确实没行」才返回默认；其它错误一律 throw
+    /// 拉取单个 Profile
+    /// - 只有「确实没行」才返回默认壳数据；其它网络/鉴权错误一律 throw
     func fetchProfile(userId uid: UUID) async throws -> ProfileRow {
         DLog.info("[ProfileService] fetchProfile start uid=\(uid)")
 
         do {
-            let row: ProfileRow =
-                try await supabase
-                    .from("profiles")
-                    .select()
-                    .eq("id", value: uid)
-                    .single()
-                    .execute()
-                    .value
+            // ✅ select() 会自动查询所有字段，包括 total_games 等
+            let row: ProfileRow = try await supabase
+                .from("profiles")
+                .select()
+                .eq("id", value: uid)
+                .single()
+                .execute()
+                .value
 
             DLog.ok("[ProfileService] fetchProfile success uid=\(uid) avatar=\(row.avatarURL ?? "nil")")
             return row
@@ -42,6 +55,7 @@ final class ProfileService {
         } catch {
             let msg = String(describing: error)
 
+            // 处理 406 Not Acceptable 或 No Rows 错误，返回默认数据
             if msg.contains("406") || msg.localizedCaseInsensitiveContains("no rows") {
                 DLog.warn("[ProfileService] fetchProfile no rows uid=\(uid) -> return default shell")
                 return ProfileRow(
@@ -57,10 +71,9 @@ final class ProfileService {
         }
     }
 
-    // MARK: - Upsert profile
-
+    /// 更新/插入 Profile
     func upsertProfile(_ profile: ProfileRow) async throws {
-        DLog.info("[ProfileService] upsertProfile start id=\(profile.id) username=\(profile.username ?? "nil") avatar=\(profile.avatarURL ?? "nil")")
+        DLog.info("[ProfileService] upsertProfile start id=\(profile.id) username=\(profile.username ?? "nil")")
 
         do {
             try await supabase
@@ -75,13 +88,12 @@ final class ProfileService {
         }
     }
 
-    // MARK: - Upload avatar
+    // MARK: - Avatar Management (Storage)
 
     /// 上传头像（JPEG）到 Storage，返回 path（不是 URL）
     func uploadAvatarJPEG(userId uid: UUID, jpegData: Data) async throws -> String {
         let path = avatarPath(for: uid)
-
-        DLog.info("[ProfileService] uploadAvatarJPEG start uid=\(uid) bucket=\(bucket) path=\(path) bytes=\(jpegData.count)")
+        DLog.info("[ProfileService] uploadAvatarJPEG start uid=\(uid) path=\(path) bytes=\(jpegData.count)")
 
         do {
             try await supabase.storage
@@ -91,7 +103,7 @@ final class ProfileService {
                     data: jpegData,
                     options: FileOptions(
                         contentType: "image/jpeg",
-                        upsert: false   // ✅ 版本化路径，不需要覆盖
+                        upsert: false // ✅ 版本化路径，不需要覆盖
                     )
                 )
 
@@ -104,17 +116,16 @@ final class ProfileService {
         }
     }
 
-    // MARK: - Signed URL
-
+    /// 获取 Signed URL (用于私有桶访问)
     func signedAvatarURL(for path: String, expiresIn seconds: Int = 60 * 10) async throws -> URL {
-        DLog.info("[ProfileService] signedAvatarURL start path=\(path) exp=\(seconds)s")
+        // DLog.info("[ProfileService] signedAvatarURL start path=\(path)") // 可选：减少日志噪音
 
         do {
             let url = try await supabase.storage
                 .from(bucket)
                 .createSignedURL(path: path, expiresIn: seconds)
 
-            DLog.ok("[ProfileService] signedAvatarURL success path=\(path)")
+            // DLog.ok("[ProfileService] signedAvatarURL success")
             return url
 
         } catch {
@@ -122,42 +133,51 @@ final class ProfileService {
             throw error
         }
     }
-}
 
+    // MARK: - Batch Operations (Map/List Support)
 
-extension ProfileService {
-    
-    // 定义缓存项结构
-    struct ProfileInfo {
-        let name: String
-        let avatarDownloadURL: URL?
-        let avatarPath: String?
+    /// 基础批量拉取：仅获取数据库行信息
+    func fetchProfiles(ids: [UUID]) async throws -> [ProfileRow] {
+        guard !ids.isEmpty else { return [] }
+        DLog.info("[ProfileService] fetchProfiles batch start count=\(ids.count)")
+        
+        do {
+            let rows: [ProfileRow] = try await supabase
+                .from("profiles")
+                .select()
+                .in("id", value: ids)
+                .execute()
+                .value
+            return rows
+        } catch {
+            DLog.err("[ProfileService] fetchProfiles batch failed: \(error)")
+            return []
+        }
     }
     
     /// ✅ 终极方法：批量拉取资料 + 并发签名头像
+    /// 返回字典：[UserID : ProfileInfo]
     func fetchProfilesAndSignAvatars(ids: [UUID]) async -> [UUID: ProfileInfo] {
-        guard !ids.isEmpty else { return [:] }
+        // 1. 先从数据库批量查人
+        let rows = try? await fetchProfiles(ids: ids)
+        guard let rows = rows, !rows.isEmpty else { return [:] }
         
-        // 1. 数据库查询 (WHERE id IN (...))
-        guard let rows: [ProfileRow] = try? await supabase
-            .from("profiles")
-            .select()
-            .in("id", value: ids)
-            .execute()
-            .value else { return [:] }
-        
-        // 2. 并发处理头像签名
+        // 2. 使用 TaskGroup 并行处理头像签名 (速度快)
         return await withTaskGroup(of: (UUID, ProfileInfo).self) { group in
             for row in rows {
                 group.addTask {
                     let name = row.username ?? "神秘特工"
                     var downloadURL: URL? = nil
-                    let storagePath = row.avatarURL // 数据库里存的是 path
+                    let storagePath = row.avatarURL
                     
-                    // 如果有头像路径，生成签名 URL
+                    // 如果有头像路径，尝试签名
                     if let path = storagePath, !path.isEmpty {
-                        // 签名有效期设长一点 (例如 1 小时)，反正 Kingfisher 有缓存
-                        downloadURL = try? await self.signedAvatarURL(for: path, expiresIn: 3600)
+                        do {
+                            // 调用现有的签名逻辑，有效期设长一点，比如 1小时
+                            downloadURL = try await self.signedAvatarURL(for: path, expiresIn: 3600)
+                        } catch {
+                            print("⚠️ Avatar sign failed for \(row.id): \(error)")
+                        }
                     }
                     
                     let info = ProfileInfo(
@@ -169,12 +189,65 @@ extension ProfileService {
                 }
             }
             
-            // 3. 汇总结果
+            // 3. 收集结果
             var result: [UUID: ProfileInfo] = [:]
             for await (uid, info) in group {
                 result[uid] = info
             }
             return result
         }
+    }
+
+    // MARK: - Achievements System
+
+    /// 从数据库拉取所有成就定义配置 (Metadata)
+    func fetchAchievementDefinitions() async throws -> [AchievementDefinition] {
+        DLog.info("[ProfileService] fetchAchievementDefinitions start")
+        
+        do {
+            let defs: [AchievementDefinition] = try await supabase
+                .from("achievement_definitions")
+                .select()
+                .execute()
+                .value
+            
+            DLog.ok("[ProfileService] fetched \(defs.count) definitions")
+            return defs
+        } catch {
+            DLog.err("[ProfileService] fetchAchievementDefinitions failed: \(error)")
+            throw error
+        }
+    }
+
+    /// 拉取用户获得的所有成就
+    func fetchAchievements(userId: UUID) async throws -> [UserAchievementRow] {
+        let rows: [UserAchievementRow] = try await supabase
+            .from("user_achievements")
+            .select()
+            .eq("user_id", value: userId)
+            .execute()
+            .value
+        return rows
+    }
+    
+    /// 删除成就 (对应 UI 的“管理-删除”功能)
+    func deleteAchievement(id: Int) async throws {
+        try await supabase
+            .from("user_achievements")
+            .delete()
+            .eq("id", value: id)
+            .execute()
+    }
+    
+    /// 添加成就 (仅供测试或结算时调用)
+    func addAchievement(userId: UUID, type: String) async throws {
+        struct Payload: Encodable {
+            let user_id: UUID
+            let type: String
+        }
+        try await supabase
+            .from("user_achievements")
+            .insert(Payload(user_id: userId, type: type))
+            .execute()
     }
 }
