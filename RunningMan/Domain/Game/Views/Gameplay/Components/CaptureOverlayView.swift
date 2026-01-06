@@ -222,10 +222,64 @@ struct VictoryStampShape: View {
     }
 }
 
-// MARK: - Previews (修复 escaped 报错)
-#Preview("Runner Escaped") {
-    ZStack { Color.black.ignoresSafeArea(); CaptureOverlayView(type: .runnerEscaped, message: "存活时间达标") {} }
-}
+// MARK: - Previews
+
 #Preview("Hunter Caught One") {
-    ZStack { Color.gray.ignoresSafeArea(); CaptureOverlayView(type: .hunterCaughtOne, message: "距离: 5m") {} }
+    ZStack {
+        Color.black.ignoresSafeArea()
+        CaptureOverlayView(
+            type: .hunterCaughtOne,
+            message: "抓捕成功\n距离: 3.2m"
+        ) {
+            // Dismiss callback
+        }
+    }
+}
+
+#Preview("Runner Busted") {
+    ZStack {
+        Color.black.ignoresSafeArea()
+        CaptureOverlayView(
+            type: .runnerBusted,
+            message: "你被猎人抓获！"
+        ) {
+            // Dismiss callback
+        }
+    }
+}
+
+#Preview("Game Victory") {
+    ZStack {
+        Color.black.ignoresSafeArea()
+        CaptureOverlayView(
+            type: .gameVictory,
+            message: "猎人大胜利\n所有逃跑者被捕获"
+        ) {
+            // Dismiss callback
+        }
+    }
+}
+
+#Preview("Game Defeat") {
+    ZStack {
+        Color.black.ignoresSafeArea()
+        CaptureOverlayView(
+            type: .gameDefeat,
+            message: "猎人失败\n时间耗尽"
+        ) {
+            // Dismiss callback
+        }
+    }
+}
+
+#Preview("Runner Escaped") {
+    ZStack {
+        Color.black.ignoresSafeArea()
+        CaptureOverlayView(
+            type: .runnerEscaped,
+            message: "逃脱成功\n存活时间达标"
+        ) {
+            // Dismiss callback
+        }
+    }
 }

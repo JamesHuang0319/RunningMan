@@ -16,10 +16,11 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
     var authorizationStatus: CLAuthorizationStatus = .notDetermined
     var lastErrorMessage: String?
 
-    // MARK: - Private
+    // MARK: - Private Properties
     private let locationManager = CLLocationManager()
     private var locationTask: Task<Void, Never>?
 
+    // MARK: - Init
     override init() {
         super.init()
         locationManager.delegate = self
@@ -28,10 +29,10 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
         refreshMessageFromAuth()
     }
 
-    // MARK: - Permission
+    // MARK: - Permission Management
     func requestPermission() {
         locationManager.requestWhenInUseAuthorization()
-        // 有些情况下回调会稍后到；这里先同步刷新一次
+        // 有些情况下回调会稍后到；这里先同步刷新一次状态
         authorizationStatus = locationManager.authorizationStatus
         refreshMessageFromAuth()
     }
@@ -45,7 +46,8 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
         }
     }
 
-    // MARK: - Start / Stop
+    // MARK: - Start / Stop Location Updates
+    
     func start() {
         // 无权限直接提示，不启动任务
         guard canUseLocation else {
@@ -53,6 +55,7 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
             return
         }
 
+        // 防止重复启动
         guard locationTask == nil else { return }
         lastErrorMessage = nil
 
@@ -62,14 +65,14 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
                 for try await update in CLLocationUpdate.liveUpdates() {
                     if Task.isCancelled { return }
 
-                    // iOS 18: 可用时读取诊断（更细原因）
+                    // iOS 18: 可用时读取诊断信息（获取更细致的错误原因）
                     await MainActor.run {
                         self.consumeDiagnosticsIfAvailable(update)
                     }
 
                     if let location = update.location {
-                        // ✅ 修改点：在这里进行坐标转换
-                        // 硬件返回的是 WGS-84，我们转为 GCJ-02 后再更新给 UI 和业务
+                        // ✅ 核心逻辑：坐标转换
+                        // 硬件返回的是 WGS-84，转为 GCJ-02 后再更新给 UI 和业务
                         let gcjLocation = LocationUtils.wgs84ToGcj02(
                             lat: location.coordinate.latitude,
                             lon: location.coordinate.longitude
@@ -82,11 +85,10 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
                     }
                 }
             } catch is CancellationError {
-                // 正常取消
+                // 任务被取消，属正常流程
             } catch {
                 await MainActor.run {
-                    self.lastErrorMessage =
-                        "❌ 定位服务出错：\(error.localizedDescription)"
+                    self.lastErrorMessage = "❌ 定位服务出错：\(error.localizedDescription)"
                 }
             }
         }
@@ -97,13 +99,12 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
         locationTask = nil
     }
 
-    // MARK: - ✅ NEW: One-shot location for UI (不会影响 start() 的持续更新)
-    /// 只取一次位置（用于像 EntranceView 这种：打开时锁定地图中心）
-    /// - 不会停止你现有的 liveUpdates 任务
-    /// - 如果当前已有 currentLocation，会直接返回，避免额外等待
-    func requestOneShotLocation(timeoutSeconds: Double = 3.0) async
-        -> CLLocationCoordinate2D?
-    {
+    // MARK: - One-shot Location (For UI Snapshots)
+    
+    /// 只取一次位置（例如：打开页面时锁定地图中心）
+    /// - 不会停止现有的 liveUpdates 任务
+    /// - 如果当前已有 currentLocation，直接返回缓存，避免等待
+    func requestOneShotLocation(timeoutSeconds: Double = 3.0) async -> CLLocationCoordinate2D? {
         if let cached = currentLocation { return cached }
         guard canUseLocation else { return nil }
 
@@ -112,10 +113,8 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
             let deadline = Date().addingTimeInterval(timeoutSeconds)
 
             while Date() < deadline {
-                if let update = try await iterator.next(),
-                    let loc = update.location
-                {
-                    // ✅ 修改点：OneShot 也要转换，保持一致
+                if let update = try await iterator.next(), let loc = update.location {
+                    // ✅ OneShot 同样需要转换，保持坐标系一致
                     return LocationUtils.wgs84ToGcj02(
                         lat: loc.coordinate.latitude,
                         lon: loc.coordinate.longitude
@@ -128,18 +127,19 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
         }
     }
 
-    // MARK: - CLLocationManagerDelegate (最稳的权限变化监听)
+    // MARK: - CLLocationManagerDelegate
+    
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         authorizationStatus = manager.authorizationStatus
         refreshMessageFromAuth()
 
         switch authorizationStatus {
         case .authorizedAlways, .authorizedWhenInUse:
-            // ✅ 建议：授权后自动恢复定位（你也可以注释掉改为手动）
+            // ✅ 授权获得后自动恢复定位
             start()
 
         case .denied, .restricted:
-            // 权限被拒绝/受限：停定位并清空
+            // 权限被拒绝/受限：停止定位并清空数据
             stop()
             currentLocation = nil
 
@@ -151,7 +151,8 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
         }
     }
 
-    // MARK: - Helpers
+    // MARK: - Helpers & Diagnostics
+
     private func refreshMessageFromAuth() {
         switch authorizationStatus {
         case .authorizedAlways, .authorizedWhenInUse:
@@ -167,13 +168,11 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
         }
     }
 
-    /// iOS 18: 从 CLLocationUpdate 读取“不给位置”的细原因（可选但很强）
+    /// iOS 18: 从 CLLocationUpdate 读取“不给位置”的详细原因
     @MainActor
     private func consumeDiagnosticsIfAvailable(_ update: CLLocationUpdate) {
         if #available(iOS 18.0, *) {
-            // 注意：这些并不等于“授权状态”，而是更细的诊断原因
-            if update.authorizationDenied || update.authorizationDeniedGlobally
-            {
+            if update.authorizationDenied || update.authorizationDeniedGlobally {
                 lastErrorMessage = "定位权限被拒绝：请到系统设置中开启定位权限。"
             } else if update.authorizationRestricted {
                 lastErrorMessage = "定位权限受限：可能由系统策略限制。"
@@ -182,20 +181,17 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
             } else if update.locationUnavailable {
                 lastErrorMessage = "位置暂不可用：请检查 GPS/网络或到室外重试。"
             } else if update.serviceSessionRequired {
-                // 你后面如果要后台/更强导航能力，可能会用到 CLServiceSession
                 lastErrorMessage = "定位需要 Service Session（iOS 18）：请检查定位会话设置。"
             } else if update.accuracyLimited {
-                // 是否提示看你需求；很多情况下不必打扰用户
                 // lastErrorMessage = "定位精度受限：可在系统设置开启“精确位置”。"
             } else {
-                // 诊断没有问题：不强制清空 lastErrorMessage
-                // 如果你想“只要正常就清空”，可以打开：
-                // if canUseLocation { lastErrorMessage = nil }
+                // 诊断无异常
             }
         }
     }
-
 }
+
+// MARK: - Location Utils (Coordinate Transform)
 
 struct LocationUtils {
 
@@ -203,8 +199,7 @@ struct LocationUtils {
     static let ee = 0.00669342162296594329
 
     /// 将 WGS-84 (国际标准/硬件GPS) 转换为 GCJ-02 (火星坐标/高德/腾讯/国内AppleMap)
-    static func wgs84ToGcj02(lat: Double, lon: Double) -> CLLocationCoordinate2D
-    {
+    static func wgs84ToGcj02(lat: Double, lon: Double) -> CLLocationCoordinate2D {
         if outOfChina(lat: lat, lon: lon) {
             return CLLocationCoordinate2D(latitude: lat, longitude: lon)
         }
@@ -233,27 +228,18 @@ struct LocationUtils {
     }
 
     private static func transformLat(x: Double, y: Double) -> Double {
-        var ret =
-            -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2
-            * sqrt(abs(x))
-        ret +=
-            (20.0 * sin(6.0 * x * .pi) + 20.0 * sin(2.0 * x * .pi)) * 2.0 / 3.0
+        var ret = -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * sqrt(abs(x))
+        ret += (20.0 * sin(6.0 * x * .pi) + 20.0 * sin(2.0 * x * .pi)) * 2.0 / 3.0
         ret += (20.0 * sin(y * .pi) + 40.0 * sin(y / 3.0 * .pi)) * 2.0 / 3.0
-        ret +=
-            (160.0 * sin(y / 12.0 * .pi) + 320 * sin(y * .pi / 30.0)) * 2.0
-            / 3.0
+        ret += (160.0 * sin(y / 12.0 * .pi) + 320 * sin(y * .pi / 30.0)) * 2.0 / 3.0
         return ret
     }
 
     private static func transformLon(x: Double, y: Double) -> Double {
-        var ret =
-            300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * sqrt(abs(x))
-        ret +=
-            (20.0 * sin(6.0 * x * .pi) + 20.0 * sin(2.0 * x * .pi)) * 2.0 / 3.0
+        var ret = 300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * sqrt(abs(x))
+        ret += (20.0 * sin(6.0 * x * .pi) + 20.0 * sin(2.0 * x * .pi)) * 2.0 / 3.0
         ret += (20.0 * sin(x * .pi) + 40.0 * sin(x / 3.0 * .pi)) * 2.0 / 3.0
-        ret +=
-            (150.0 * sin(x / 12.0 * .pi) + 300.0 * sin(x / 30.0 * .pi)) * 2.0
-            / 3.0
+        ret += (150.0 * sin(x / 12.0 * .pi) + 300.0 * sin(x / 30.0 * .pi)) * 2.0 / 3.0
         return ret
     }
 }

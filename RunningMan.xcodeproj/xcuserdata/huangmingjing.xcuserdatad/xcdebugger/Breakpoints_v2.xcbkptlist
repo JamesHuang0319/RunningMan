@@ -52,5 +52,81 @@
             landmarkType = "24">
          </BreakpointContent>
       </BreakpointProxy>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "92011556-9DFC-4EAA-B7E3-1EE1B06EFDD2"
+            shouldBeEnabled = "Yes"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "RunningMan/Domain/Profile/Store/ProfileStore.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "296"
+            endingLineNumber = "296"
+            landmarkName = "updateMyAvatar(userId:jpegData:)"
+            landmarkType = "7">
+            <Locations>
+               <Location
+                  uuid = "92011556-9DFC-4EAA-B7E3-1EE1B06EFDD2 - 9f4293bb7fea8a44"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "(1) suspend resume partial function for RunningMan.ProfileStore.updateMyAvatar(userId: Foundation.UUID, jpegData: Foundation.Data) async -&gt; ()"
+                  moduleName = "RunningMan.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/huangmingjing/code/RunningMan/RunningMan/Domain/Profile/Store/ProfileStore.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "297"
+                  endingLineNumber = "297">
+               </Location>
+               <Location
+                  uuid = "92011556-9DFC-4EAA-B7E3-1EE1B06EFDD2 - 1a66f58c89b2279c"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "(2) await resume partial function for RunningMan.ProfileStore.updateMyAvatar(userId: Foundation.UUID, jpegData: Foundation.Data) async -&gt; ()"
+                  moduleName = "RunningMan.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/huangmingjing/code/RunningMan/RunningMan/Domain/Profile/Store/ProfileStore.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "297"
+                  endingLineNumber = "297">
+               </Location>
+               <Location
+                  uuid = "92011556-9DFC-4EAA-B7E3-1EE1B06EFDD2 - 99dccf444fba5c"
+                  shouldBeEnabled = "Yes"
+                  ignoreCount = "0"
+                  continueAfterRunningActions = "No"
+                  symbolName = "(9) suspend resume partial function for RunningMan.ProfileStore.updateMyAvatar(userId: Foundation.UUID, jpegData: Foundation.Data) async -&gt; ()"
+                  moduleName = "RunningMan.debug.dylib"
+                  usesParentBreakpointCondition = "Yes"
+                  urlString = "file:///Users/huangmingjing/code/RunningMan/RunningMan/Domain/Profile/Store/ProfileStore.swift"
+                  startingColumnNumber = "9223372036854775807"
+                  endingColumnNumber = "9223372036854775807"
+                  startingLineNumber = "297"
+                  endingLineNumber = "297">
+               </Location>
+            </Locations>
+         </BreakpointContent>
+      </BreakpointProxy>
+      <BreakpointProxy
+         BreakpointExtensionID = "Xcode.Breakpoint.FileBreakpoint">
+         <BreakpointContent
+            uuid = "1234D4A4-37CE-4F1E-890C-26501D2E9C6D"
+            shouldBeEnabled = "No"
+            ignoreCount = "0"
+            continueAfterRunningActions = "No"
+            filePath = "RunningMan/Domain/Game/Views/RoomSetup/EntranceView.swift"
+            startingColumnNumber = "9223372036854775807"
+            endingColumnNumber = "9223372036854775807"
+            startingLineNumber = "169"
+            endingLineNumber = "169"
+            landmarkName = "topAgentHUD"
+            landmarkType = "24">
+         </BreakpointContent>
+      </BreakpointProxy>
    </Breakpoints>
 </Bucket>

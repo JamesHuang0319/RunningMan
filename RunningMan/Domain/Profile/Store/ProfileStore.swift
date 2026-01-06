@@ -14,11 +14,11 @@ import SwiftUI
 final class ProfileStore {
 
     // MARK: - Dependencies
-    
+
     private let service: ProfileService
 
     // MARK: - Init
-    
+
     private var bootstrappedUserId: UUID?
 
     init(service: ProfileService = ProfileService()) {
@@ -66,6 +66,44 @@ final class ProfileStore {
 
     /// 刷新缓冲时间 (1分钟)：如果剩余有效期少于此值，提前刷新
     private let refreshLeeway: TimeInterval = 60
+
+    // ✅ 供主页展示的数据源 (过滤掉 isHidden == true 的)
+    var homeAchievements: [AchievementItem] {
+        guard let userAchievements = me?.userAchievements else { return [] }
+        return
+            userAchievements
+            .filter { !$0.isHidden }  // 只显示未隐藏的
+            .compactMap { mapToUIModel(row: $0) }
+    }
+
+    // ✅ 供 Modal 展示的全量数据源 (合并逻辑)
+    var allAchievementsStatus: [AchievementStatusItem] {
+        // 1. 获取所有定义 (按 ID 或其他顺序排序)
+        let defs = achievementDefs.values.sorted { $0.type < $1.type }
+
+        // 2. 建立用户拥有的成就字典
+        let myMap = Dictionary(
+            uniqueKeysWithValues: (me?.userAchievements ?? []).map {
+                ($0.type, $0)
+            }
+        )
+
+        // 3. 合并
+        return defs.map { def in
+            AchievementStatusItem(
+                definition: def,
+                userRecord: myMap[def.type]
+            )
+        }// ✅ 核心排序逻辑
+        .sorted { item1, item2 in
+            // 规则1: 已解锁的排在前面
+            if item1.isUnlocked != item2.isUnlocked {
+                return item1.isUnlocked
+            }
+            // 规则2: 如果状态相同，按 ID 或名称排序 (保证列表稳定，不乱跳)
+            return item1.definition.type < item2.definition.type
+        }
+    }
 
     // MARK: - Persistence Keys & Models
 
@@ -138,11 +176,11 @@ final class ProfileStore {
         do {
             let oldPath = profilesById[userId]?.avatarURL
 
-            // 1. 网络请求 Profile
+            // 1. ✅ 网络请求 Profile (现在包含了 Achievements)
             let p = try await service.fetchProfile(userId: userId)
             me = p
             profilesById[userId] = p
-            
+
             // 2. 更新本地缓存
             persistMe(p)
 
@@ -160,8 +198,19 @@ final class ProfileStore {
                 )
             }
 
-            // 4. 并行加载成就列表
-            await loadAchievements(userId: userId)
+            // 4. ✅ 优化：直接处理嵌套返回的成就数据，无需再次发起网络请求
+            if let rawList = p.userAchievements {
+                // 将 DB Model 转换为 UI Model
+                self.achievements = rawList.compactMap { mapToUIModel(row: $0) }
+                // 更新成就缓存
+                persistAchievements(self.achievements)
+                DLog.ok(
+                    "[ProfileStore] loadMe processed \(rawList.count) achievements directly"
+                )
+            } else {
+                // 兜底：如果万一没查到（通常不会发生），清空列表
+                self.achievements = []
+            }
 
             DLog.ok("[ProfileStore] loadMe success")
         } catch {
@@ -186,12 +235,14 @@ final class ProfileStore {
             // 更新本地缓存
             persistDefinitions()
 
-            DLog.ok("[ProfileStore] Loaded \(achievementDefs.count) definitions")
+            DLog.ok(
+                "[ProfileStore] Loaded \(achievementDefs.count) definitions"
+            )
         } catch {
             DLog.err("[ProfileStore] Failed to load definitions: \(error)")
         }
     }
-    
+
     /// 加载用户获得的成就
     @MainActor
     func loadAchievements(userId: UUID) async {
@@ -206,27 +257,30 @@ final class ProfileStore {
         }
     }
 
-    /// 删除某个成就 (UI 操作)
     @MainActor
-    func removeAchievement(item: AchievementItem) async {
-        // 1. 乐观更新 UI (带动画)
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-            if let index = achievements.firstIndex(of: item) {
-                achievements.remove(at: index)
+    func toggleAchievementVisibility(dbID: Int, hide: Bool) async {
+        // 1. 乐观更新 UI (修改内存数据)
+        // (保持你现在的逻辑不变)
+        if var currentMe = me, var list = currentMe.userAchievements {
+            if let idx = list.firstIndex(where: { $0.id == dbID }) {
+                list[idx].isHidden = hide
+                currentMe.userAchievements = list
+                self.me = currentMe  // 触发 UI 刷新
             }
         }
 
-        // 2. 更新本地缓存
-        persistAchievements(achievements)
+        // 2. 发送网络请求
+        do {
+            // ✅ 修改点：不再直接操作 supabase，而是调用 service 封装好的方法
+            try await service.updateAchievementVisibility(
+                id: dbID,
+                isHidden: hide
+            )
 
-        // 3. 发送网络请求
-        if let dbID = item.dbID {
-            do {
-                try await service.deleteAchievement(id: dbID)
-            } catch {
-                DLog.err("Failed to delete achievement: \(error)")
-                // TODO: 生产环境可考虑回滚 UI 或弹 Toast
-            }
+            DLog.info("Visibility updated for achievement \(dbID)")
+        } catch {
+            DLog.err("Update visibility failed: \(error)")
+            // 这里可以添加回滚 UI 的逻辑：把 isHidden 改回去
         }
     }
 
@@ -245,25 +299,27 @@ final class ProfileStore {
                 jpegData: jpegData
             )
 
-            // 2. 更新 DB
-            var p = (me ?? profilesById[userId]) ?? ProfileRow(
-                id: userId,
-                username: nil,
-                fullName: nil,
-                avatarURL: nil
+            // 2. ✅ 安全更新：只更新 avatar_url 字段，不碰统计数据
+            try await service.updateProfileFields(
+                userId: userId,
+                updates: ["avatar_url": path]
             )
-            p.avatarURL = path
-            try await service.upsertProfile(p)
 
-            // 3. 更新内存 & 缓存
-            me = p
-            profilesById[userId] = p
-            persistMe(p)
+            // 3. 更新内存模型 (只修改 avatarURL，保留其他 stats 不变)
+            if var currentMe = me {
+                currentMe.avatarURL = path
+                self.me = currentMe
+                persistMe(currentMe)
+            } else {
+                // 如果此时内存里没有 me，为了 UI 响应，我们可以重新拉取一次
+                // 或者暂时只更新 profilesById
+                await loadMe(userId: userId)
+            }
 
-            // 4. 强制刷新 Signed URL
+            // 4. 刷新缓存
             await refreshAvatarURL(path: path, force: true)
-
             DLog.ok("[ProfileStore] updateMyAvatar success")
+
         } catch {
             self.error = error.localizedDescription
             DLog.err("[ProfileStore] updateMyAvatar failed: \(error)")
@@ -273,30 +329,27 @@ final class ProfileStore {
     /// 更新用户名
     @MainActor
     func updateMyUsername(userId: UUID, username: String) async {
-        error = nil
         let trimmed = username.trimmingCharacters(in: .whitespacesAndNewlines)
-
         guard !trimmed.isEmpty else {
             self.error = "用户名不能为空"
             return
         }
 
         do {
-            var p = (me ?? profilesById[userId]) ?? ProfileRow(
-                id: userId,
-                username: nil,
-                fullName: nil,
-                avatarURL: nil
+            // 1. ✅ 安全更新：只更新 username 字段
+            try await service.updateProfileFields(
+                userId: userId,
+                updates: ["username": trimmed]
             )
-            p.username = trimmed
 
-            // 1. 更新 DB
-            try await service.upsertProfile(p)
-
-            // 2. 更新内存 & 缓存
-            me = p
-            profilesById[userId] = p
-            persistMe(p)
+            // 2. 更新内存模型
+            if var currentMe = me {
+                currentMe.username = trimmed
+                self.me = currentMe
+                persistMe(currentMe)
+            } else {
+                await loadMe(userId: userId)
+            }
 
             DLog.ok("[ProfileStore] updateMyUsername success")
         } catch {
@@ -304,7 +357,7 @@ final class ProfileStore {
             DLog.err("[ProfileStore] updateMyUsername failed: \(error)")
         }
     }
-    
+
     // MARK: - Core Logic: Batch Load
 
     /// 批量加载用户 Profile (用于地图/好友列表)
@@ -324,7 +377,9 @@ final class ProfileStore {
                     await refreshAvatarURL(path: path, force: false)
                 }
             } catch {
-                DLog.warn("[ProfileStore] loadProfiles failed uid=\(uid) err=\(error)")
+                DLog.warn(
+                    "[ProfileStore] loadProfiles failed uid=\(uid) err=\(error)"
+                )
             }
         }
     }
@@ -342,7 +397,8 @@ final class ProfileStore {
     func avatarPath(for uid: UUID) -> String? { profilesById[uid]?.avatarURL }
 
     var winRateString: String {
-        guard let games = me?.totalGames, let wins = me?.totalWins, games > 0 else {
+        guard let games = me?.totalGames, let wins = me?.totalWins, games > 0
+        else {
             return "--"
         }
         let rate = (Double(wins) / Double(games)) * 100
@@ -386,7 +442,7 @@ final class ProfileStore {
             UserDefaults.standard.set(data, forKey: persistedAchievementsKey)
         }
     }
-    
+
     private func persistDefinitions() {
         let list = Array(achievementDefs.values)
         if let data = try? JSONEncoder().encode(list) {
@@ -408,9 +464,12 @@ final class ProfileStore {
             username: p.username,
             fullName: p.fullName,
             avatarURL: p.avatarURL,
-            totalGames: p.totalGames,
-            totalWins: p.totalWins,
-            totalDistance: p.totalDistance
+            // 🛠️ 修复 1: 使用 ?? 0 解包可选值
+            totalGames: p.totalGames ?? 0,
+            totalWins: p.totalWins ?? 0,
+            totalDistance: p.totalDistance ?? 0.0,
+            // 🛠️ 修复 2: 补上新增字段，本地恢复时默认为 nil (成就列表会由 restorePersistedAchievements 单独恢复)
+            userAchievements: nil
         )
         me = restored
         profilesById[userId] = restored
@@ -425,21 +484,34 @@ final class ProfileStore {
     @MainActor
     private func restorePersistedAchievements() {
         guard
-            let data = UserDefaults.standard.data(forKey: persistedAchievementsKey),
-            let pItems = try? JSONDecoder().decode([PersistedAchievement].self, from: data)
+            let data = UserDefaults.standard.data(
+                forKey: persistedAchievementsKey
+            ),
+            let pItems = try? JSONDecoder().decode(
+                [PersistedAchievement].self,
+                from: data
+            )
         else { return }
 
         // 依赖于 achievementDefs 是否已恢复
         self.achievements = pItems.compactMap { p in
             return createAchievementItem(dbID: p.dbID, type: p.type)
         }
-        DLog.ok("[ProfileStore] restored \(self.achievements.count) achievements")
+        DLog.ok(
+            "[ProfileStore] restored \(self.achievements.count) achievements"
+        )
     }
-    
+
     private func restoreDefinitions() {
         if let data = UserDefaults.standard.data(forKey: persistedDefsKey),
-            let list = try? JSONDecoder().decode([AchievementDefinition].self, from: data) {
-            self.achievementDefs = Dictionary(uniqueKeysWithValues: list.map { ($0.type, $0) })
+            let list = try? JSONDecoder().decode(
+                [AchievementDefinition].self,
+                from: data
+            )
+        {
+            self.achievementDefs = Dictionary(
+                uniqueKeysWithValues: list.map { ($0.type, $0) }
+            )
             DLog.ok("[ProfileStore] restored definitions")
         }
     }
@@ -452,7 +524,9 @@ final class ProfileStore {
     }
 
     /// 查字典 (Defs) 生成 Item
-    private func createAchievementItem(dbID: Int?, type: String) -> AchievementItem? {
+    private func createAchievementItem(dbID: Int?, type: String)
+        -> AchievementItem?
+    {
         guard let def = achievementDefs[type] else { return nil }
         return AchievementItem(
             dbID: dbID,
@@ -475,8 +549,13 @@ final class ProfileStore {
                 for: path,
                 expiresIn: Int(signedURLTTL)
             )
-            let expiresAt = Date().addingTimeInterval(signedURLTTL - refreshLeeway)
-            avatarURLByPath[path] = SignedURLCacheItem(url: url, expiresAt: expiresAt)
+            let expiresAt = Date().addingTimeInterval(
+                signedURLTTL - refreshLeeway
+            )
+            avatarURLByPath[path] = SignedURLCacheItem(
+                url: url,
+                expiresAt: expiresAt
+            )
         } catch {
             DLog.warn("[ProfileStore] refreshAvatarURL failed: \(error)")
         }
@@ -503,4 +582,5 @@ final class ProfileStore {
         UserDefaults.standard.removeObject(forKey: persistedAchievementsKey)
         // Defs 不删，因为是通用配置
     }
+
 }

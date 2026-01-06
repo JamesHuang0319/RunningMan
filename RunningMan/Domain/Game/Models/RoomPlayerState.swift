@@ -49,7 +49,7 @@ struct RoomPlayerState: Codable, Identifiable, Hashable {
     }
 
     /// 例：10 秒没更新就算“可能离线”（你可调）
-    func isStale(now: Date = Date(), threshold: TimeInterval = 10) -> Bool {
+    func isStale(now: Date = Date(), threshold: TimeInterval = 8) -> Bool {
         guard let updatedAt else { return true }
         return now.timeIntervalSince(updatedAt) > threshold
     }

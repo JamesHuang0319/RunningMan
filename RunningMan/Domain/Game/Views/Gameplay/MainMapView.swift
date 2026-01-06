@@ -76,8 +76,8 @@ struct MainMapView: View {
             Map(position: $position, scope: mapScope) {
                 UserAnnotation()
 
-                ForEach(game.players) { p in
-                    if !p.isMe && !p.isOffline {
+                ForEach(game.mapPlayers) { p in
+                    if !p.isMe {
                         // 实时计算距离（单位：米）
                         let distance = game.distanceTo(p.coordinate)
 
@@ -108,6 +108,7 @@ struct MainMapView: View {
                                     player: p,
                                     distance: distance
                                 )
+                                .opacity(p.isOffline ? 0.35 : 1.0)  // ✅ 离线变灰
                                 .frame(width: 50, height: 50)
                                 .contentShape(Rectangle())  // 扩大点击区域
                             }
@@ -307,6 +308,16 @@ struct MainMapView: View {
         .onAppear {
             triggerInstruction(game.phaseInstruction)
         }
+        #if DEBUG
+            .overlay(alignment: .topTrailing) {
+                DebugOverlay()
+                .environment(game)
+                .padding(.trailing, 14)
+                .padding(.top, 90)  // 你要避开顶部 HUD 就调这里
+                .zIndex(1_000_000)
+            }
+        #endif
+
     }
 
     // MARK: - Helper Methods

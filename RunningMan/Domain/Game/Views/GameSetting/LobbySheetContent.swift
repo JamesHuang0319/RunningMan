@@ -107,16 +107,16 @@ struct LobbySheetContent: View {
                             Text("已就位")
                                 .font(.headline)
                             Spacer()
-                            Text("\(game.onlinePlayers.count) 人")
+                            Text("\(game.lobbyPlayers.count) 人")
                                 .foregroundStyle(.secondary)
                         }
                         .padding(.horizontal, 4)
 
-                        ForEach(game.onlinePlayers) { player in
+                        ForEach(game.lobbyPlayers) { player in
                             LobbyPlayerRow(player: player)
                         }
 
-                        if game.onlinePlayers.isEmpty {
+                        if game.lobbyPlayers.isEmpty {
                             ContentUnavailableView(
                                 "暂无玩家",
                                 systemImage: "person.slash"
@@ -210,11 +210,10 @@ struct RegionSelectionView: View {
                     // 1. 本地选中
                     game.selectedRegion = region
                     // 2. 如果是房主，同步到服务器 (Lock Region)
-                    if let rid = game.roomId {
-                        Task {
-                            await game.lockRoomRegion(roomId: rid, regionId: region.id)
-                        }
+                    Task {
+                        await game.lockSelectedRegion()
                     }
+
                     // 3. 选完自动返回上一页
                     //dismiss()
                 }
@@ -281,7 +280,7 @@ struct RoleCard: View {
 
 // 3. 玩家列表行 (LobbyPlayerRow)
 struct LobbyPlayerRow: View {
-    let player: PlayerDisplay
+    let player: LobbyPlayerDisplay
 
     var body: some View {
         HStack(spacing: 12) {
@@ -318,24 +317,18 @@ struct LobbyPlayerRow: View {
 
             Spacer()
 
-            // 在线/离线状态
-            if player.isOffline {
-                HStack(spacing: 4) {
-                    Image(systemName: "wifi.slash")
-                    Text("离线")
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            if !player.isOnline {
+                Label("离线", systemImage: "wifi.slash")
+                    .foregroundStyle(.secondary)
+            } else if player.isStale {
+                Label("信号弱", systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.yellow)
             } else {
-                HStack(spacing: 4) {
-                    Circle()
-                        .fill(.green)
-                        .frame(width: 6, height: 6)
-                    Text("在线")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                Label("在线", systemImage: "circle.fill")
+                    .labelStyle(.iconOnly)
+                    .foregroundStyle(.green)
             }
+
         }
         .padding(12)
         .background(Color.primary.opacity(0.03))  // 每一行有个浅色底

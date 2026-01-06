@@ -127,6 +127,16 @@ struct LobbyView: View {
                 .presentationBackground(.ultraThinMaterial)  // 统一使用极薄材质
                 .interactiveDismissDisabled()
         }
+        #if DEBUG
+            .overlay(alignment: .topTrailing) {
+                DebugOverlay()
+                .environment(game)
+                .padding(.trailing, 14)
+                .padding(.top, 90)  // 你要避开顶部 HUD 就调这里
+                .zIndex(1_000_000)
+            }
+        #endif
+
     }
 
     private func flyToSelected() {
