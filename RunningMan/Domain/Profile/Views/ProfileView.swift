@@ -252,20 +252,18 @@ struct ProfileView: View {
                 Text("荣誉陈列室").font(.headline).foregroundStyle(.primary)
                 Spacer()
                 Button {
-                    // 使用标准的 spring 动画切换状态
-                    withAnimation(.spring(response: 0.35, dampingFraction: 0.8))
-                    {
-                        isManagingHonors.toggle()
-                    }
+                    // ✅ 移除 withAnimation，避免干扰子视图的无限循环动画
+                    isManagingHonors.toggle()
                 } label: {
                     Text(isManagingHonors ? "完成" : "管理")
-                        .font(.subheadline.bold())
+                        .font(.subheadline)
                         .foregroundStyle(isManagingHonors ? .blue : .secondary)
                 }
             }
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 20) {
+                    // 1. 遍历展示勋章
                     ForEach(profileStore.homeAchievements) { item in
                         AchievementBadge(
                             item: item,
@@ -284,22 +282,43 @@ struct ProfileView: View {
                         )
                     }
 
+                    // 2. 空状态提示
                     if profileStore.homeAchievements.isEmpty {
                         Text("点击 + 号展示荣誉")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                            .padding(.leading, 4)
                     }
 
-                    // 添加按钮
+                    // 3. 加号按钮 (打开 Modal)
                     Button {
                         showAllAchievements = true
                     } label: {
-                        plusPlaceholder
+                        VStack(spacing: 8) {
+                            ZStack {
+                                Circle()
+                                    .fill(Color.gray.opacity(0.05))
+                                    .frame(width: 64, height: 64)
+                                    .overlay(
+                                        Circle()
+                                            .stroke(
+                                                style: StrokeStyle(
+                                                    lineWidth: 1,
+                                                    dash: [4]
+                                                )
+                                            )
+                                            .foregroundStyle(.gray.opacity(0.3))
+                                    )
+                                Image(systemName: "plus")
+                                    .font(.title2)
+                                    .foregroundStyle(.gray)
+                            }
+                            Text("添加")
+                                .font(.caption2)
+                                .foregroundStyle(.clear)  // 保持对齐占位
+                        }
                     }
                 }
-                .padding(.vertical, 10)  // 给抖动留出空间，防止剪裁
-                .padding(.horizontal, 2)
+                .padding(.all, 10)  // 保持 padding 防止阴影被切
             }
         }
         .initialCardStyle(cornerRadius: 20)
@@ -308,42 +327,18 @@ struct ProfileView: View {
         }
     }
 
-    // 抽离的加号占位图
-    private var plusPlaceholder: some View {
-        VStack(spacing: 8) {
-            ZStack {
-                Circle()
-                    .fill(Color.gray.opacity(0.05))
-                    .frame(width: 64, height: 64)
-                    .overlay(
-                        Circle()
-                            .stroke(style: StrokeStyle(lineWidth: 1, dash: [4]))
-                            .foregroundStyle(.gray.opacity(0.3))
-                    )
-                Image(systemName: "plus")
-                    .font(.title2)
-                    .foregroundStyle(.gray)
-            }
-            Text("添加")
-                .font(.caption2)
-                .foregroundStyle(.clear)
-        }
-    }
-    
-    // MARK: - 彻底修复动画卡死的 AchievementBadge
-        struct AchievementBadge: View {
+    struct AchievementBadge: View {
             let item: AchievementItem
             let isEditing: Bool
             let onDelete: () -> Void
 
-            // 关键点 1：引入内部状态驱动摆动
-            @State private var internalWobble = false
-
             var body: some View {
                 VStack(spacing: 8) {
-                    ZStack(alignment: .topTrailing) {
-                        
-                        // 图标层
+                    ZStack(alignment: .topLeading) {
+
+                        // ——————————————————————————————
+                        // 1. 图标层 (独立动画)
+                        // ——————————————————————————————
                         ZStack {
                             Circle()
                                 .fill(item.color.gradient.opacity(0.1))
@@ -352,54 +347,56 @@ struct ProfileView: View {
                                 .font(.title)
                                 .foregroundStyle(item.color.gradient)
                         }
-                        // 关键点 2：摆动幅度从负到正，视觉更平衡
-                        .rotationEffect(.degrees(isEditing ? (internalWobble ? -2.0 : 2.0) : 0))
-                        // 关键点 3：移除此处的 .animation(...) 绑定，改用下面的内部监听
-                        
-                        // 删除按钮
-                        if isEditing {
-                            Button(action: {
-                                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                                onDelete()
-                            }) {
-                                Image(systemName: "minus")
-                                    .font(.system(size: 10, weight: .bold))
-                                    .foregroundStyle(.white)
-                                    .frame(width: 22, height: 22)
-                                    .background(Color.red, in: Circle())
-                                    .overlay(Circle().stroke(.white, lineWidth: 2))
-                                    .shadow(radius: 2)
+                        // ✅ 旋转逻辑
+                        // 技巧：让它在 -3度 和 3度 之间摆动会更自然
+                        .rotationEffect(.degrees(isEditing ? -3 : 0))
+                        // ✅ 动画绑定：紧贴着 rotationEffect
+                        .animation(
+                            isEditing
+                                ? .linear(duration: 0.14).repeatForever(autoreverses: true)
+                                : .default, // 停止时平滑回正
+                            value: isEditing
+                        )
+
+                        // ——————————————————————————————
+                        // 2. 按钮层 (独立动画)
+                        // ——————————————————————————————
+                        // ✅ 关键修改：用一个 ZStack 包裹按钮，把过渡动画只加在这个 ZStack 上
+                        // 这样就不会影响上面图标的 repeatForever 了
+                        ZStack {
+                            if isEditing {
+                                Button(action: onDelete) {
+                                    Image(systemName: "minus")
+                                        .font(.system(size: 10, weight: .bold))
+                                        .foregroundStyle(.white)
+                                        .padding(6)
+                                        .background(Color.red, in: Circle())
+                                        .overlay(Circle().stroke(.white, lineWidth: 2))
+                                        .shadow(
+                                            color: .black.opacity(0.1),
+                                            radius: 2,
+                                            x: 0,
+                                            y: 1
+                                        )
+                                }
+                                .offset(x: -6, y: -6)
+                                .zIndex(1)
+                                .transition(.scale.combined(with: .opacity))
                             }
-                            .offset(x: 4, y: -4)
-                            .transition(.scale.combined(with: .opacity))
-                            .zIndex(2)
                         }
+                        // ✅ 这里的动画只作用于按钮的出现/消失
+                        .animation(.easeInOut(duration: 0.2), value: isEditing)
                     }
+                    // ❌ 之前报错的代码在这一行，我已经删除了。
+                    // 确保这里没有 .animation(...)
 
                     Text(item.name)
                         .font(.caption2.bold())
                         .foregroundStyle(.secondary)
-                        .fixedSize()
                 }
-                // 关键点 4：在这里监听 isEditing 的变化
-                .onChange(of: isEditing, initial: true) { _, newValue in
-                    if newValue {
-                        // 当开启管理模式时，开启无限循环摆动
-                        // 使用 linear 确保左右摆动速度一致，不掉帧
-                        withAnimation(.linear(duration: 0.12).repeatForever(autoreverses: true)) {
-                            internalWobble = true
-                        }
-                    } else {
-                        // 当关闭管理模式时，平滑回到初始位
-                        withAnimation(.default) {
-                            internalWobble = false
-                        }
-                    }
-                }
-                // 处理 badge 整体缩放和按钮出现的动画（非无限循环）
-                .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isEditing)
             }
         }
+
     // MARK: - 4. Settings Section
     private var settingsSection: some View {
         VStack(spacing: 0) {

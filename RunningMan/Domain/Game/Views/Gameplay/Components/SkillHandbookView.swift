@@ -4,9 +4,10 @@
 //
 //  Created by 黄名靖 on 2025/12/28.
 //
+
 import SwiftUI
 
-// MARK: - 4. 说明书组件 (可读性增强版)
+// MARK: - 战术指南（道具说明书）
 struct SkillHandbookView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -15,33 +16,35 @@ struct SkillHandbookView: View {
             HStack(spacing: 8) {
                 Image(systemName: "terminal.fill")
                     .font(.system(size: 12, weight: .semibold))
+
                 Text("战术指南")
                     .font(.system(size: 15, weight: .bold, design: .monospaced))
+
                 Spacer()
             }
             .foregroundStyle(.blue.opacity(0.95))
 
             // List
             VStack(spacing: 12) {
-                ForEach(FruitSkill.allSkills) { skill in
+                ForEach(ItemDef.all) { item in
                     HStack(alignment: .center, spacing: 12) {
 
-                        // Icon pill (略收一点，让文本区更宽)
-                        Text(skill.icon)
+                        // Icon pill
+                        Text(item.icon)
                             .font(.system(size: 20))
                             .frame(width: 34, height: 34)
-                            .background(skill.color.opacity(0.14), in: Circle())
+                            .background(item.color.opacity(0.14), in: Circle())
                             .overlay(
-                                Circle().stroke(skill.color.opacity(0.22), lineWidth: 1)
+                                Circle().stroke(item.color.opacity(0.22), lineWidth: 1)
                             )
 
                         // Text
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(skill.name)
+                            Text(item.name)
                                 .font(.system(size: 14, weight: .semibold))
                                 .foregroundStyle(.primary)
 
-                            Text(skill.description)
+                            Text(item.description)
                                 .font(.system(size: 12, weight: .regular))
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
@@ -50,7 +53,6 @@ struct SkillHandbookView: View {
 
                         Spacer(minLength: 0)
                     }
-                    // 增加一点“行的可点击/可呼吸”区域（看起来更高级）
                     .padding(.vertical, 2)
                 }
             }
@@ -63,6 +65,6 @@ struct SkillHandbookView: View {
                 .stroke(.white.opacity(0.18), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.12), radius: 12, y: 6)
-        .frame(width: 288) // ✅ 宽一点 = 字体能变大还保持一行
+        .frame(width: 288)
     }
 }

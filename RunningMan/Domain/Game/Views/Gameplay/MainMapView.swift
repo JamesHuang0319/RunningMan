@@ -6,6 +6,8 @@
 
 import MapKit
 import SwiftUI
+import Supabase
+
 
 struct MainMapView: View {
     @Environment(GameStore.self) private var game
@@ -17,7 +19,7 @@ struct MainMapView: View {
     // UI 状态
     @State private var isBackpackExpanded = false
     @State private var showHandbook = false
-    @State private var activeNotification: FruitSkill? = nil
+    @State private var activeNotification: ItemDef? = nil
 
     // ✅ 用于控制顶部弹出战术提醒的局部状态
     @State private var transientInstruction: String? = nil
@@ -30,9 +32,11 @@ struct MainMapView: View {
     @State private var captureResult:
         (CaptureOverlayView.AnimationType, String) = (.hunterCaughtOne, "")
 
-    @State private var mySkills: [FruitSkill] = [
-        FruitSkill.allSkills[0], FruitSkill.allSkills[1],
+    @State private var myItems: [ItemDef] = [
+        ItemDef.byType[.mangoCloak]!,
+        ItemDef.byType[.strawberryShield]!
     ]
+
 
     // 品牌渐变色
     private var brandGradient: LinearGradient {
@@ -206,15 +210,25 @@ struct MainMapView: View {
 
             // --- 3. 动态通知层 ---
             VStack(spacing: 10) {
+                // 你自己的战术提示（阶段提示/本地提示）
                 if let message = transientInstruction {
                     TacticalAlertView(message: message)
                 }
                 if let skill = activeNotification {
                     SkillFeedbackOverlay(skill: skill)
                 }
+
+                // ✅ 来自 room_events 的“他人道具提示”
+                if let msg = game.toastMessage {
+                    TacticalAlertView(message: msg)
+                }
+                if let def = game.itemNotification {
+                    SkillFeedbackOverlay(skill: def)
+                }
             }
             .padding(.top, 145)
             .allowsHitTesting(false)
+
 
             // --- 4. 撕名牌确认 UI（模态层）---
             if showRipUI, let target = targetToRip {
@@ -239,26 +253,27 @@ struct MainMapView: View {
                 HStack(alignment: .bottom) {
                     HoldToEndButton(holdDuration: 1.5) {
                         if game.isHost {
-                            await game.hostEndGame()
+                            await game.hostEndGame()      // 房主：结束整局
                         } else {
-                            game.playerSurrender()
+                            game.finishMyGameAndWait()   // 普通玩家：结束自己
                         }
                     }
+
                     .padding(.leading, 20)
 
                     Spacer()
 
                     VStack(spacing: 14) {
                         if isBackpackExpanded {
-                            ForEach(mySkills) { skill in
+                            ForEach(myItems) { item in
                                 Button {
-                                    useSkill(skill)
+                                    useItem(item)
                                 } label: {
-                                    Text(skill.icon).font(.system(size: 26))
+                                    Text(item .icon).font(.system(size: 26))
                                         .modifier(
                                             GlassButtonStyle(
                                                 size: 54,
-                                                color: skill.color
+                                                color: item.color
                                             )
                                         )
                                 }
@@ -321,22 +336,34 @@ struct MainMapView: View {
     }
 
     // MARK: - Helper Methods
-
-    private func useSkill(_ skill: FruitSkill) {
+    
+    private func useItem(_ item: ItemDef) {
         UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
-        withAnimation(.spring(response: 0.4, dampingFraction: 0.7)) {
-            activeNotification = skill
-        }
-        withAnimation(.spring()) {
-            mySkills.removeAll(where: { $0.id == skill.id })
-            if mySkills.isEmpty { isBackpackExpanded = false }
+
+        // 1) 本地 UI 反馈
+        withAnimation { activeNotification = item }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            withAnimation { activeNotification = nil }
         }
 
+        // 2) RPC
         Task {
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-            withAnimation(.easeOut(duration: 0.5)) { activeNotification = nil }
+            do {
+                let emptyPayload: [String: AnyJSON] = [:]
+                let result = try await game.useItem(type: item.type, targetUserId: nil, payload: emptyPayload)
+                if result.ok == false {
+                    triggerInstruction("❌ 道具失败：\(result.reason ?? "unknown")")
+                } else {
+                    // 可选：给一条更明确的提示
+                    triggerInstruction("📡 已发送：\(item.name)")
+                }
+            } catch {
+                triggerInstruction("❌ 道具使用失败：\(error.localizedDescription)")
+            }
         }
     }
+
+
 
     private func triggerInstruction(_ message: String) {
         guard !message.isEmpty else { return }
@@ -488,7 +515,7 @@ struct TacticalAlertView: View {
 // MARK: - 技能反馈组件 (Skill Feedback)
 
 struct SkillFeedbackOverlay: View {
-    let skill: FruitSkill
+    let skill: ItemDef
     var body: some View {
         HStack(spacing: 10) {
             Text(skill.icon)

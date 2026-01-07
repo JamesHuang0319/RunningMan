@@ -39,9 +39,18 @@ struct DebugOverlay: View {
             }
 
             if expanded {
+                let readyCount = game.statesByUserId.values.filter { $0.status == .ready }.count
+                let activeCount = game.statesByUserId.values.filter { $0.status == .active }.count
+                let finishedCount = game.statesByUserId.values.filter { $0.status == .finished }.count
+
                 VStack(alignment: .leading, spacing: 4) {
+                    Text("Phase: \(String(describing: game.phase))")
+                    Text("RoomStatus: \(game.room?.status.rawValue ?? "-")")
+                    Text("isInRoom: \(game.isInRoom ? "true" : "false")")
+
                     Text("States: \(game.statesByUserId.count)")
-                    Text("States(coord): \(game.statesByUserId.values.filter { $0.coordinate != nil }.count)")
+                    Text("Ready: \(readyCount)  Active: \(activeCount)  Finished: \(finishedCount)")
+
                     Text("Presence: \(game.presenceOnlineIds.count)")
                     Text("Players(map): \(game.mapPlayers.count)")
                     Text("Players(lobby): \(game.lobbyPlayers.count)")

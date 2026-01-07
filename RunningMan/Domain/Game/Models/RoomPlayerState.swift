@@ -9,6 +9,7 @@
 
 import Foundation
 import CoreLocation
+import Supabase
 
 /// room_players 表：建议主键 (room_id, user_id)
 /// ✅ 低频：role/status
@@ -28,9 +29,13 @@ struct RoomPlayerState: Codable, Identifiable, Hashable {
     var lat: Double?
     var lng: Double?
 
+    // ✅ 新增：room_players.state (jsonb)
+    // 不会破坏旧数据：如果 DB 没返回/为空 -> 默认为 nil
+    var state: JSONObject?
+    
     // 用于“最后活跃时间/离线判断”
-    var joinedAt: Date?
     var updatedAt: Date?
+    var joinedAt: Date?
 
     enum CodingKeys: String, CodingKey {
         case roomId = "room_id"
@@ -39,6 +44,7 @@ struct RoomPlayerState: Codable, Identifiable, Hashable {
         case status
         case lat
         case lng
+        case state // ✅ 新增
         case joinedAt = "joined_at"
         case updatedAt = "updated_at"
     }

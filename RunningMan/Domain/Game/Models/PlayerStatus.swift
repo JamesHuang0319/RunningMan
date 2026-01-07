@@ -10,19 +10,36 @@ import Foundation
 
 
 enum PlayerStatus: String, Codable, CaseIterable, Identifiable, Equatable {
-    case ready      // <--- 新增：在大厅里点了准备
-    case active     // 游戏中（活着）
-    case caught     // 被抓了 (或者叫 eliminated)
-    case offline    // 离线 (可选，有时候离线是根据时间计算的，不一定是数据库状态)
+
+    case ready      // 大厅准备
+    case active     // 游戏中
+    case caught     // 被抓（失败）
+    case finished   // ✅ 主动结束本局参与（不等于被抓）
+    
+    case offline    // ⚠️ UI 派生状态（不写 DB）
 
     var id: String { rawValue }
 
     var displayName: String {
         switch self {
-        case .ready: return "已准备"
-        case .active: return "游戏中"
-        case .caught: return "被抓捕"
-        case .offline: return "离线"
+        case .ready:    return "已准备"
+        case .active:   return "游戏中"
+        case .caught:   return "被抓捕"
+        case .finished: return "已结束行动"
+        case .offline:  return "离线"
+        }
+    }
+}
+
+extension PlayerStatus {
+
+    /// ✅ 允许写入 DB 的玩法状态
+    var isDBPlayableStatus: Bool {
+        switch self {
+        case .ready, .active, .caught, .finished:
+            return true
+        case .offline:
+            return false
         }
     }
 }

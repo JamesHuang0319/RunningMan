@@ -316,18 +316,26 @@ struct LobbyPlayerRow: View {
             }
 
             Spacer()
-
-            if !player.isOnline {
+            
+            
+            switch player.badge {
+            case .connecting:
+                Label("连接中", systemImage: "wifi")
+                    .foregroundStyle(.secondary)
+            case .offline:
                 Label("离线", systemImage: "wifi.slash")
                     .foregroundStyle(.secondary)
-            } else if player.isStale {
-                Label("信号弱", systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.yellow)
-            } else {
-                Label("在线", systemImage: "circle.fill")
-                    .labelStyle(.iconOnly)
-                    .foregroundStyle(.green)
+            case .online:
+                if player.isStale {
+                    Label("信号弱", systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.yellow)
+                } else {
+                    Label("在线", systemImage: "circle.fill")
+                        .labelStyle(.iconOnly)
+                        .foregroundStyle(.green)
+                }
             }
+
 
         }
         .padding(12)
