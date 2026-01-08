@@ -4,6 +4,8 @@ struct DebugOverlay: View {
     @Environment(GameStore.self) private var game
     @State private var expanded: Bool = false
     @State private var showExplain: Bool = false
+    // ✅ 从 MainMapView 传进来
+    @Binding var debugDistanceOverride: Double?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -65,6 +67,20 @@ struct DebugOverlay: View {
                 .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
+        #if DEBUG
+       .overlay(alignment: .bottomLeading) {
+           VStack(spacing: 8) {
+               Button("Dist=9.5m") { debugDistanceOverride = 9.5 }
+               Button("Dist=12m")  { debugDistanceOverride = 12 }
+               Button("Dist=nil")  { debugDistanceOverride = nil }
+           }
+           .padding(12)
+           .background(.ultraThinMaterial)
+           .clipShape(RoundedRectangle(cornerRadius: 12))
+           .padding(.leading, 12)
+           .padding(.bottom, 120)
+       }
+       #endif
         .onChange(of: showExplain) { _, v in
             guard v else { return }
             // 这里你可以改成用你现成的 TacticalAlertView/triggerInstruction
@@ -73,5 +89,6 @@ struct DebugOverlay: View {
                 showExplain = false
             }
         }
+        
     }
 }

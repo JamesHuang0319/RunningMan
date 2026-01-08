@@ -39,6 +39,11 @@ final class GameStore {
     var selectedRegion: GameRegion = GameRegion.allCSURegions.first!
     var safeZone: SafeZone?
 
+    /// ✅ room_events 去重（你的 ev.id 是 Int64）
+    private var handledRoomEventIds: Set<Int64> = []
+
+
+
     /// ✅ 同步生命周期：只看是否仍在房间内（不要用 phase）
     private(set) var isInRoom: Bool = false
 
@@ -53,6 +58,12 @@ final class GameStore {
     // MARK: - ⑤ Realtime Cache (DB 真相 + 广播补充)
 
     var statesByUserId: [UUID: RoomPlayerState] = [:]
+    /// ✅ 玩家首次出现在本地的时间（用于“前 3 秒默认在线”）
+    private var firstSeenAtByUserId: [UUID: Date] = [:]
+
+    /// ✅ 进入 lobby 后，前 5秒默认在线
+    private let lobbyOnlineGrace: TimeInterval = 5.0
+
 
     // MARK: - ⑥ Presence (真在线)
 
@@ -69,6 +80,63 @@ final class GameStore {
 
     private var lastMoveSeqByUserId: [UUID: Int] = [:]
     private var myMoveSeq: Int = 0
+    
+    // MARK: - Global Overlay Broadcast (one-shot)
+
+    struct OverlayRequest: Identifiable, Equatable {
+        let id = UUID()
+        let type: CaptureOverlayView.AnimationType
+        let message: String
+        let priority: Int         // 大结算 > 被抓 > 抓到一个
+        let ttl: TimeInterval     // overlay 展示时间建议 3s
+    }
+
+    /// ✅ 全局一次性 Overlay 广播：由 GameStore 产生，MainMapView 消费
+    var overlayRequest: OverlayRequest? = nil
+
+    /// ✅ 去重：避免 room_events + room_players 同时触发导致重复弹
+    private var lastOverlayFingerprint: String? = nil
+    private var lastOverlayAt: Date = .distantPast
+
+    /// ✅ Runner 被抓兜底：检测我自己的 status 边沿变化
+    private var lastMePlayableStatus: PlayerStatus? = nil
+    
+    var amISpectating: Bool {
+        guard let meId, let s = statesByUserId[meId] else { return false }
+        return s.status == .caught || s.status == .finished
+    }
+
+    /// 还能行动：active 才算
+    var canAct: Bool {
+        guard let meId, let s = statesByUserId[meId] else { return false }
+        return phase == .playing && s.status == .active
+    }
+
+
+    @MainActor
+    private func emitOverlay(
+        _ type: CaptureOverlayView.AnimationType,
+        _ message: String,
+        priority: Int,
+        ttl: TimeInterval = 3.0,
+        fingerprint: String
+    ) {
+        let now = Date()
+
+        // 1) 近时间内同 fingerprint 不重复弹（避免 events + status 双触发）
+        if lastOverlayFingerprint == fingerprint, now.timeIntervalSince(lastOverlayAt) < 1.2 {
+            return
+        }
+
+        // 2) 如果当前 overlayRequest 未被消费，按优先级决定是否覆盖
+        if let cur = overlayRequest {
+            if priority <= cur.priority { return }
+        }
+
+        lastOverlayFingerprint = fingerprint
+        lastOverlayAt = now
+        overlayRequest = OverlayRequest(type: type, message: message, priority: priority, ttl: ttl)
+    }
 
     // MARK: - ⑧ UI State
 
@@ -126,25 +194,24 @@ final class GameStore {
 
         return statesByUserId.values.map { state in
             let info = profileCache[state.userId]
-
-            // 是否 stale（DB 坐标停更）
             let isStale = state.isStale(now: now, threshold: 8.0)
 
-            // ✅ 计算 PresenceBadge（核心）
+            // ✅ 1) 前 3 秒：只要出现在 statesByUserId，就默认在线
+            let firstSeen = firstSeenAtByUserId[state.userId]
+            let inGrace = (firstSeen != nil) && (now.timeIntervalSince(firstSeen!) < lobbyOnlineGrace)
+
+
             let badge: PresenceBadge = {
-                // 1) 还没拿到一次 presence sync：一律显示“连接中”
-                //    （避免刚进房就把所有人标离线）
-                if !presenceDidSyncOnce {
-                    return .connecting
-                }
+                // 1) 前 N 秒：只要出现在 statesByUserId，就默认在线
+                if inGrace { return .online }
 
-                // 2) 如果你未来把 channel 状态回调出来：
-                //    断网/重连时把 syncChannelConnected=false
-                if !syncChannelConnected {
-                    return .connecting
-                }
+                // 2) 通道没连上：永远 connecting（不进入 offline）
+                guard syncChannelConnected else { return .connecting }
 
-                // 3) 已经 sync + 连接正常：用 onlineIds 判定在线/离线
+                // 3) 还没真正收到过 presence：connecting（不进入 offline）
+                guard presenceDidSyncOnce else { return .connecting }
+
+                // 4) 现在才允许 offline
                 return presenceOnlineIds.contains(state.userId) ? .online : .offline
             }()
 
@@ -160,6 +227,7 @@ final class GameStore {
         }
         .sorted { $0.displayName < $1.displayName }
     }
+
 
     var toastMessage: String? = nil
     var itemNotification: ItemDef? = nil
@@ -234,7 +302,8 @@ final class GameStore {
             lastSeenAt: state.updatedAt,
             isMe: state.userId == meId,
             isOffline: isOffline,
-            isExposed: exposed
+            isExposed: exposed,
+            state: state.state   // ✅✅✅ 关键：把 DB json state 带到 UI
         )
     }
 
@@ -253,9 +322,14 @@ final class GameStore {
         }
 
         return statesByUserId.values
-            .filter(shouldShowOnMap)                     // ✅ 只在这里做“地图显示规则”
+            .filter(shouldShowOnMap)
+            .filter { st in
+                // ✅ 只对猎人隐藏 cloaked runner
+                !isCloakedAndHiddenForHunter(st, now: now)
+            }
             .compactMap { makePlayerDisplay(from: $0, now: now) }
             .sorted { $0.displayName < $1.displayName }
+
     }
 
     /// ✅ 我自己的 PlayerDisplay（不依赖 mapPlayers）
@@ -339,8 +413,8 @@ final class GameStore {
     private func startZoneShrinking() {
         stopZoneShrinking()
 
-        let tick: TimeInterval = 0.5
-        let shrinkPerTick: CLLocationDistance = 5
+        let tick: TimeInterval = 1.0
+        let shrinkPerTick: CLLocationDistance = 3
 
         gameTimer = Timer.scheduledTimer(withTimeInterval: tick, repeats: true) { [weak self] _ in
             guard let self else { return }
@@ -444,11 +518,51 @@ final class GameStore {
             }
 
         case .ended:
-            stopZoneShrinking()
-            cancelNavigation()
-            if phase != .gameOver {
-                withAnimation(.easeInOut) { phase = .gameOver }
-            }
+              stopZoneShrinking()
+              cancelNavigation()
+
+              // ✅✅✅ 最佳体验：overlay 播完再切 gameOver（用 ttl 驱动）
+              // 1) 只在“第一次进入 ended”时发 overlay & 安排延迟切换（避免重复触发）
+              if phase != .gameOver {
+                  let ttl: TimeInterval = 3.2
+
+                  if meRole == .hunter {
+                      emitOverlay(
+                          .gameVictory,
+                          "任务结束\n猎人胜利 ✅",
+                          priority: 100,
+                          ttl: ttl,
+                          fingerprint: "rooms_ended:\(room.id.uuidString):hunter"
+                      )
+                  } else {
+                      emitOverlay(
+                          .gameDefeat,
+                          "任务结束\n逃跑者失败 ❌",
+                          priority: 100,
+                          ttl: ttl,
+                          fingerprint: "rooms_ended:\(room.id.uuidString):runner"
+                      )
+                  }
+
+                  // 2) ✅ 按 ttl 延迟切 gameOver，让 overlay 一定可见且尽量播完
+                  Task { @MainActor [weak self] in
+                      guard let self else { return }
+
+                      // ⚠️ delay 至少 0.35s，避免“UI 还没渲染一帧就切走”
+                      let delay = max(0.35, ttl - 0.2)
+                      try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+
+                      // ✅ 如果中途房间被 close/leave/reset 了，就别切了
+                      guard self.roomId == room.id else { return }
+
+                      withAnimation(.easeInOut) {
+                          self.phase = .gameOver
+                      }
+                  }
+              } else {
+                  // 已经 gameOver 了，不重复安排 Task
+                  DLog.info("🏁 applyRoomUpdate ended: already in gameOver, skip overlay/transition")
+              }
 
         case .closed:
             stopZoneShrinking()
@@ -485,8 +599,8 @@ final class GameStore {
         }
     }
 
-    /// ✅ 普通玩家：结束本局参与，进入 GameOver 等待（不离房）
-    /// - 行为：不再同步移动、不再落库位置；但仍保持 Presence 在线，仍在房间
+  
+    /// ✅ 结束本局参与（投降/退出行动）：留在 MainMapView 观战，不切 phase
     func finishMyGameAndWait() {
         // 0) 必须在房间里
         guard isInRoom else { return }
@@ -499,12 +613,9 @@ final class GameStore {
         // 2) 上报玩法状态（DB）
         updateMyStatus(.finished)
 
-        // 3) 本地进入结算页
-        withAnimation(.easeInOut) {
-            phase = .gameOver
-        }
 
-        DLog.info("🏁 finishMyGameAndWait: stop move+heartbeat, status=finished, phase=gameOver")
+        DLog.info("🏁 finishMyGameAndWait: stop move+heartbeat, status=finished (phase unchanged)")
+
     }
 
 
@@ -512,36 +623,45 @@ final class GameStore {
     // MARK: - ⑨ Broadcast Move 应用（体验层）
 
     /// ✅ 接收别人的高频坐标（Broadcast）
+    /// - 体验层只更新坐标/时间；绝不改变 role/status（DB 真相优先）
+    /// - caught/finished 的人忽略广播，避免“复活”
     func applyRemoteMove(userId: UUID, lat: Double, lng: Double, ts: Date, seq: Int) {
-        // 忽略自己
         if userId == meId { return }
 
-        // 防乱序
         let lastSeq = lastMoveSeqByUserId[userId] ?? -1
         if seq <= lastSeq { return }
         lastMoveSeqByUserId[userId] = seq
 
-        guard let rid = self.roomId else {
-            DLog.warn("applyRemoteMove ignored: roomId nil user=\(userId)")
+        guard let rid = self.roomId else { return }
+
+        // ✅ 如果已有 state，永远不改 role/status
+        if var existing = statesByUserId[userId] {
+
+            // ✅ caught/finished 不吃广播，避免地图复活、重复抓
+            if existing.status != .active { return }
+
+            existing.lat = lat
+            existing.lng = lng
+            existing.updatedAt = ts
+            statesByUserId[userId] = existing
             return
         }
 
-        // ✅ 如果本地还没有这个人，就先建一个占位 state
-        var s = statesByUserId[userId] ?? RoomPlayerState(
+        // ✅ 本地完全没见过：建占位（但这只是“坐标缓存”，以后 DB upsert 会覆盖）
+        if firstSeenAtByUserId[userId] == nil {
+            firstSeenAtByUserId[userId] = Date()
+        }
+
+        statesByUserId[userId] = RoomPlayerState(
             roomId: rid,
             userId: userId,
-            role: .runner,
-            status: .active,
-            lat: nil,
-            lng: nil,
+            role: .runner,         // 默认值无所谓，后续 DB upsert 会纠正
+            status: .active,       // 这里只是占位；但一旦 DB 告诉我们 caught，就会被锁死不再吃广播
+            lat: lat,
+            lng: lng,
             updatedAt: ts,
-            joinedAt: nil,
+            joinedAt: nil
         )
-
-        s.lat = lat
-        s.lng = lng
-        s.updatedAt = ts
-        statesByUserId[userId] = s
     }
 
     // MARK: - ⑩ Reset
@@ -561,6 +681,7 @@ final class GameStore {
         currentRoute = nil
         trackingTargetId = nil
         errorMessage = nil
+        firstSeenAtByUserId.removeAll()
     }
 
     // MARK: - ⑪ Helpers
@@ -736,6 +857,10 @@ final class GameStore {
         
         // ✅✅✅【新增】本地先登记自己：Lobby 立刻有 1 人，不等 snapshot
            if statesByUserId[meId] == nil {
+               // ✅ 这里就是你找不到的位置：第一次看到自己就记时间（用于 lobby 3 秒默认在线）
+                if firstSeenAtByUserId[meId] == nil {
+                    firstSeenAtByUserId[meId] = Date()
+                }
                statesByUserId[meId] = RoomPlayerState(
                    roomId: roomId,
                    userId: meId,
@@ -772,10 +897,25 @@ final class GameStore {
             },
             onPresenceSync: { [weak self] online in
                 Task { @MainActor in
-                    self?.presenceOnlineIds = online
+                    guard let self else { return }
+                    self.presenceOnlineIds = online
+                    // ✅ 只有“真的收到一次 presence 回调”才算 didSyncOnce
+                    if self.presenceDidSyncOnce == false {
+                        self.presenceDidSyncOnce = true
+                    }
+                }
+            },
+            onSyncStatus: { [weak self] connected in
+                Task { @MainActor in
+                    self?.syncChannelConnected = connected
+                    // 可选：断线时也把 didSyncOnce 复位（更符合“未知=connecting”）
+                    if connected == false {
+                        self?.presenceDidSyncOnce = false
+                    }
                 }
             }
         )
+
         
         // GameStore.joinRoom(roomId:) 里加上（和 rooms/players 同级）
         roomService.setRoomEventCallback { [weak self] ev in
@@ -809,12 +949,6 @@ final class GameStore {
             // ✅ 同步层：Presence + Broadcast
             try await roomService.subscribeSync(roomId: roomId, meId: meId)
             
-            // ✅ 关键：subscribeSync 能 return，说明 channel 至少已 subscribed 成功
-            self.syncChannelConnected = true
-
-            // ✅ 关键：避免 RoomService 的 presenceDidSyncOnce=true 但你没把回调传回 GameStore
-            self.presenceDidSyncOnce = true
-            
             self.enteredRoomAt = Date()
 
             // ✅ 启动：低频落库 + 高频广播
@@ -828,29 +962,169 @@ final class GameStore {
         }
     }
     
+    
+    // MARK: - room_events realtime 入口（统一驱动 toast + overlayRequest）
+
     @MainActor
     private func applyRoomEvent(_ ev: RoomEvent) {
         DLog.info("📨 room_event id=\(ev.id) type=\(ev.type) payload=\(String(describing: ev.payload))")
 
-        guard ev.type == "item_used" else { return }
+        // 0) 只处理我们关心的事件类型
+        guard ["item_used", "shield_blocked", "tag_success"].contains(ev.type) else { return }
 
-        guard let s = ev.payloadString("item_type"),
-              let t = ItemType(rawValue: s),
-              let def = ItemDef.byType[t]
-        else {
-            DLog.warn("⚠️ item_used but payload item_type decode failed")
+        // 1) 去重（避免重复 insert / 重连补发 / 同一事件多次回调）
+        if handledRoomEventIds.contains(ev.id) { return }
+        handledRoomEventIds.insert(ev.id)
+
+        // 2) ✅ 过滤自己：只对非抓捕事件过滤
+        //    - item_used / shield_blocked：自己触发没必要 toast（避免刷屏）
+        //    - tag_success：绝对不能过滤！否则猎人收不到自己抓到人的“盖章”
+        if ev.type != "tag_success", let actor = ev.actor, actor == meId {
             return
         }
 
-        toastMessage = "🎯 有人使用：\(def.name)"
-        itemNotification = def
+        // 3) actorName / roleTag
+        let actorName: String = {
+            guard let actor = ev.actor else { return "有人" }
+            if let info = profileCache[actor], !info.name.isEmpty { return info.name }
+            return String(actor.uuidString.prefix(4)).uppercased()
+        }()
 
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-            if itemNotification == def { itemNotification = nil }
-            toastMessage = nil
+        let actorRoleTag: String = {
+            guard let actor = ev.actor else { return "" }
+            switch statesByUserId[actor]?.role {
+            case .some(.hunter): return "猎人"
+            case .some(.runner): return "逃跑者"
+            default: return ""
+            }
+        }()
+
+        let roleSuffix = actorRoleTag.isEmpty ? "" : "（\(actorRoleTag)）"
+
+        // 4) icon
+        let icon: String = {
+            switch ev.type {
+            case "item_used": return "🧰"
+            case "shield_blocked": return "🛡️"
+            case "tag_success": return "✅"
+            default: return "ℹ️"
+            }
+        }()
+
+        // 5) toast 自动清理
+        func autoClearToast(after seconds: Double = 3.0) {
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                toastMessage = nil
+            }
+        }
+
+        switch ev.type {
+
+        // =========================================================
+        // item_used：只 toast（不出盖章）
+        // =========================================================
+        case "item_used":
+            guard let s = ev.payloadString("item_type"),
+                  let t = ItemType(rawValue: s),
+                  let def = ItemDef.byType[t]
+            else {
+                DLog.warn("⚠️ item_used but payload item_type decode failed")
+                return
+            }
+
+            toastMessage = "\(icon) \(actorName)\(roleSuffix) · 使用：\(def.name)"
+            autoClearToast(after: 3.0)
+
+        // =========================================================
+        // shield_blocked：只 toast（不出盖章）
+        // =========================================================
+        case "shield_blocked":
+            let left = ev.payloadInt("shield_left") ?? ev.payloadInt("remaining_shield")
+            let dist = ev.payloadDouble("dist_m")
+
+            var msg = "\(icon) \(actorName)\(roleSuffix) · 护盾抵挡"
+            if let dist { msg += "（\(String(format: "%.1f", dist))m）" }
+            if let left { msg += "｜剩余 \(left)" }
+
+            toastMessage = msg
+            autoClearToast(after: 3.0)
+
+        // =========================================================
+        // tag_success：抓捕事件（toast + 统一 overlayRequest）
+        // =========================================================
+        case "tag_success":
+            let dist = ev.payloadDouble("dist_m")
+            let remaining = ev.payloadInt("remaining_runners")
+
+            let targetName: String = {
+                guard let target = ev.target else { return "目标" }
+                if let info = profileCache[target], !info.name.isEmpty { return info.name }
+                return String(target.uuidString.prefix(4)).uppercased()
+            }()
+
+            var msg = "\(icon) \(actorName)\(roleSuffix) · 抓到 \(targetName)"
+            if let dist { msg += "｜\(String(format: "%.1f", dist))m" }
+            if let remaining { msg += "｜剩余 \(remaining)" }
+
+            // ✅ A) 我是 target：runner 盖章（最高优先级之一）
+            if let target = ev.target, target == meId {
+                emitOverlay(
+                    .runnerBusted,
+                    "你被猎人抓获！",
+                    priority: 90,
+                    ttl: 3.0,
+                    fingerprint: "busted_event:\(ev.id)"
+                )
+            }
+
+            // ✅ B) 我是 actor：hunter 抓到一个 盖章
+            //    注意：上面我们已经确保 tag_success 不会被 actor==meId 过滤掉
+            if let actor = ev.actor, actor == meId {
+                let distText = dist.map { String(format: "%.1f", $0) } ?? "-"
+                let remText = remaining.map { "\($0)" } ?? "-"
+                emitOverlay(
+                    .hunterCaughtOne,
+                    "抓捕成功！\n距离 \(distText) 米｜剩余目标 \(remText)",
+                    priority: 60,
+                    ttl: 3.0,
+                    fingerprint: "hunter_caught_one_event:\(ev.id)"
+                )
+            }
+
+            // ✅ C) remaining==0：给所有人一个“结算预告盖章”
+            //    rooms.status=ended 之后还会再来一次最终盖章（你在 applyRoomUpdate 里做的）
+            if let r = remaining, r == 0 {
+                if meRole == .hunter {
+                    emitOverlay(
+                        .gameVictory,
+                        "全员逮捕归案！\n猎人阵营大获全胜 🎉",
+                        priority: 100,
+                        ttl: 3.2,
+                        fingerprint: "game_over_preview_event:\(ev.id):hunter"
+                    )
+                } else {
+                    emitOverlay(
+                        .gameDefeat,
+                        "全员被捕！\n逃跑者阵营失败 ☠️",
+                        priority: 100,
+                        ttl: 3.2,
+                        fingerprint: "game_over_preview_event:\(ev.id):runner"
+                    )
+                }
+            }
+
+            // toast（可选）
+            toastMessage = msg
+            autoClearToast(after: 3.0)
+
+        default:
+            return
         }
     }
+
+
+
 
 
     func leaveRoom() async {
@@ -916,8 +1190,11 @@ final class GameStore {
               DLog.err("🎮 start_game RPC failed: \(error)")
           }
     }
-
+    
     func closeRoom() async {
+        // ✅ 最关键：一进来就打栈（谁调用的一眼看到）
+        DLog.err("🧹 closeRoom CALLED stack=\n\(Thread.callStackSymbols.joined(separator: "\n"))")
+
         guard isHost else {
             errorMessage = "只有房主可以关闭房间"
             DLog.warn("🧹 closeRoom blocked: not host")
@@ -940,8 +1217,8 @@ final class GameStore {
             DLog.err("🧹 close_room RPC failed: \(error)")
         }
     }
-
     
+
     
     private func cleanupAndResetLocal() async {
         // 1️⃣ 第一时间切断一切循环
@@ -988,6 +1265,7 @@ final class GameStore {
         }
     }
 
+    
     func updateRole(to newRole: GameRole) {
         lastLocalRoleChangeTime = Date()
 
@@ -1008,8 +1286,34 @@ final class GameStore {
         }
     }
 
+    // MARK: - room_players upsert 入口（DB 真相层）
+    // 作用：更新 statesByUserId + runner 被抓“兜底检测”
+    // 注意：兜底检测必须放在任何 return 之前，否则会被 role merge 保护期吃掉
+
     func applyUpsert(_ state: RoomPlayerState) {
-        // 我自己：保护期内，保留本地 role
+        // ✅ 记录首次出现时间（只记录一次）
+        if firstSeenAtByUserId[state.userId] == nil {
+            firstSeenAtByUserId[state.userId] = Date()
+        }
+
+        // ✅ Runner busted fallback（兜底）：检测“我”的 status 边沿变化 active/ready -> caught
+        // 放最前面：避免下面 role merge 的 return 把逻辑吃掉
+        if state.userId == meId {
+            let prev = lastMePlayableStatus
+            lastMePlayableStatus = state.status
+
+            if state.status == .caught, prev != .caught {
+                emitOverlay(
+                    .runnerBusted,
+                    "你被猎人抓获！",
+                    priority: 80,          // 比 hunterCaughtOne 高；比最终结算低
+                    ttl: 3.0,
+                    fingerprint: "busted_status:\(state.userId.uuidString)"
+                )
+            }
+        }
+
+        // ✅ 我自己：role 保护期内，保留本地 role（避免网络回写把你刚切换的角色又覆盖掉）
         if state.userId == meId {
             if Date().timeIntervalSince(lastLocalRoleChangeTime) < 2.0,
                let localState = statesByUserId[state.userId] {
@@ -1019,10 +1323,34 @@ final class GameStore {
                 return
             }
         }
+
+        // 默认：直接写入真相缓存
         statesByUserId[state.userId] = state
     }
 
     // MARK: - Game Actions
+    
+    private func stateDate(_ s: RoomPlayerState, key: String) -> Date? {
+        // state: JSONObject? = [String: AnyJSON]
+        guard let raw = s.state?[key]?.stringValue else { return nil }
+        return ISO8601DateFormatter().date(from: raw)
+    }
+
+    private func isCloakedAndHiddenForHunter(_ target: RoomPlayerState, now: Date) -> Bool {
+        guard phase == .playing else { return false }
+        guard meRole == .hunter else { return false }
+        guard target.role == .runner, target.status == .active else { return false }
+
+        let cloakUntil = stateDate(target, key: "cloak_until")
+        guard let cloakUntil, now < cloakUntil else { return false }
+
+        let revealUntil = stateDate(target, key: "reveal_until")
+        if let revealUntil, now < revealUntil {
+            return false // ✅ 已揭露：可见
+        }
+        return true // ✅ cloaked 且未揭露：对猎人隐藏
+    }
+
 
     func hostEndGame() async {
         guard isHost, let roomId else { return }

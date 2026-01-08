@@ -102,6 +102,7 @@ final class RoomService {
 
     /// ✅ 防止重复 track；在断网/重连后会复位，允许重新 track
     fileprivate var didTrackOnce: Bool = false
+    private var onSyncStatus: (@MainActor (Bool) -> Void)?
 
     // MARK: - ✅ Readiness (只读，不改变逻辑)
 
@@ -135,11 +136,14 @@ final class RoomService {
 
     func setSyncCallbacks(
         onMove: @escaping @MainActor (UUID, Double, Double, Date, Int) -> Void,
-        onPresenceSync: @escaping @MainActor (Set<UUID>) -> Void
+        onPresenceSync: @escaping @MainActor (Set<UUID>) -> Void,
+        onSyncStatus: @escaping @MainActor (Bool) -> Void   // ✅ 新增：通道是否处于 subscribed
     ) {
         self.onMove = onMove
         self.onPresenceSync = onPresenceSync
+        self.onSyncStatus = onSyncStatus
     }
+
 
     // MARK: - Join / Leave (Public)
 
@@ -701,6 +705,7 @@ extension RoomService {
 
                 if st == .subscribed {
                     self.syncSubscribed = true
+                    self.onSyncStatus?(true) // ✅ 告诉 GameStore：已连上
 
                     if self.didTrackOnce == false {
                         self.didTrackOnce = true
@@ -720,10 +725,14 @@ extension RoomService {
                 } else {
                     self.syncSubscribed = false
                     self.didTrackOnce = false
-
-                    // ✅ 下次重新 subscribed 后允许再做一次“第一次全量”
+                    
+                    // ✅ 断线/退订：presence 认为“未知”，让 UI 回到 connecting
                     self.presenceDidSyncOnce = false
                     self.presenceReady = false
+                    self.onlineIds.removeAll()
+                    self.onPresenceSync?(self.onlineIds) // ✅ 推一个空集（避免别人还显示在线）
+
+                    self.onSyncStatus?(false) // ✅ 告诉 GameStore：断了
                 }
             }
         }
@@ -1032,6 +1041,7 @@ public struct AttemptTagResult: Decodable, Sendable {
     public let ok: Bool
     public let reason: String?
     public let dist_m: Double?
+    public let capture_radius_m: Double?   // ✅ 新增
     public let remaining_runners: Int?
     public let room_status: String?
     public let target_status: String?

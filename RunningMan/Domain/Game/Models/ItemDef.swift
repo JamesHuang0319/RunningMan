@@ -8,12 +8,16 @@
 // Game/Models/ItemDef.swift
 import SwiftUI
 
+enum RoleScope {
+    case hunter
+    case runner
+}
+
 enum ItemType: String, Codable, CaseIterable, Sendable {
     case mangoCloak = "mango_cloak"
     case bananaSlip = "banana_slip"
     case grapeRadar = "grape_radar"
     case watermelonMark = "watermelon_mark"
-    case pineappleEvasion = "pineapple_evasion"
     case strawberryShield = "strawberry_shield"
 }
 
@@ -50,11 +54,6 @@ struct ItemDef: Identifiable, Hashable, Sendable {
               usageMessage: "目标已被标记！",
               color: .red, cooldown: 50),
 
-        .init(type: .pineappleEvasion, icon: "🍍", name: "菠萝突围",
-              description: "8 秒内被抓更难（捕捉半xx`径变小）",
-              usageMessage: "突围中！抓捕判定降低",
-              color: .green, cooldown: 55),
-
         .init(type: .strawberryShield, icon: "🍓", name: "草莓护盾",
               description: "抵消 1 次抓捕",
               usageMessage: "护盾已激活（1次）",
@@ -64,4 +63,15 @@ struct ItemDef: Identifiable, Hashable, Sendable {
 
 extension ItemDef {
     static let byType: [ItemType: ItemDef] = Dictionary(uniqueKeysWithValues: all.map { ($0.type, $0) })
+}
+
+extension ItemType {
+    var roleScope: RoleScope {
+        switch self {
+        case .grapeRadar , .watermelonMark:
+            return .hunter   // ✅ 改这里
+        case .mangoCloak, .strawberryShield, .bananaSlip:
+            return .runner
+        }
+    }
 }

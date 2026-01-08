@@ -20,7 +20,7 @@ extension GameRegion {
 
     static let csuMainCampus = GameRegion(
         id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,  // ✅ 固定 ID
-        name: "中南大学本部",
+        name: "中南大学校本部",
         center: CLLocationCoordinate2D(latitude: 28.1706, longitude: 112.9253),
         initialRadius: 1000
     )

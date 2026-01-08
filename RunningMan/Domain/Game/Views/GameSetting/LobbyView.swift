@@ -46,20 +46,16 @@ struct LobbyView: View {
             HStack(alignment: .top) {
                 // 离开按钮
                 Button {
-                    Task { await game.leaveRoom() }
+                    Task { await game.exitGame() }
                 } label: {
                     Image(systemName: "xmark")
-                        .font(.system(size: 16, weight: .bold))  // 稍微加粗更精致
+                        .font(.system(size: 16, weight: .bold))
                         .foregroundStyle(.black.opacity(0.6))
                         .frame(width: 44, height: 44)
-                        .background(.regularMaterial, in: Circle())  // ✅ 改为亮色玻璃材质，增加通透感
-                        .shadow(
-                            color: .black.opacity(0.1),
-                            radius: 8,
-                            x: 0,
-                            y: 4
-                        )  // ✅ 增加软阴影，营造层次感
+                        .background(.regularMaterial, in: Circle())
+                        .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
                 }
+
 
                 Spacer()
 
@@ -115,9 +111,8 @@ struct LobbyView: View {
 
         // ✅ Sheet 配置
         .sheet(isPresented: .constant(true)) {
-            LobbySheetContent()
+            LobbySheetContent(selectedDetent: $selectedDetent)
                 .environment(game)
-                // 使用静态常量，解决 "Cannot set selected sheet detent" 警告
                 .presentationDetents(
                     [Self.initialDetent, .medium, .large],
                     selection: $selectedDetent
@@ -125,17 +120,18 @@ struct LobbyView: View {
                 .presentationBackgroundInteraction(.enabled)
                 .presentationCornerRadius(24)
                 .presentationBackground(.ultraThinMaterial)  // 统一使用极薄材质
-                .interactiveDismissDisabled()
+                .interactiveDismissDisabled()   
+
         }
-        #if DEBUG
-            .overlay(alignment: .topTrailing) {
-                DebugOverlay()
-                .environment(game)
-                .padding(.trailing, 14)
-                .padding(.top, 90)  // 你要避开顶部 HUD 就调这里
-                .zIndex(1_000_000)
-            }
-        #endif
+//        #if DEBUG
+//            .overlay(alignment: .topTrailing) {
+//                DebugOverlay(debugDistanceOverride: $debugDistanceOverride)
+//                .environment(game)
+//                .padding(.trailing, 14)
+//                .padding(.top, 90)  // 你要避开顶部 HUD 就调这里
+//                .zIndex(1_000_000)
+//            }
+//        #endif
 
     }
 

@@ -9,6 +9,38 @@
 import CoreLocation
 import MapKit
 import SwiftUI
+import Foundation
+import Supabase
+
+extension AnyJSON {
+    var asString: String? { stringValue }
+    var asInt: Int? { intValue }
+    var asDouble: Double? { doubleValue }
+    var asBool: Bool? { boolValue }
+
+    /// Supabase timestamptz 一般是 ISO8601 string
+    var asDate: Date? {
+        guard let s = stringValue else { return nil }
+        return ISO8601DateFormatter.cached.date(from: s)
+    }
+}
+
+extension JSONObject {
+    func string(_ key: String) -> String? { self[key]?.asString }
+    func int(_ key: String) -> Int? { self[key]?.asInt }
+    func double(_ key: String) -> Double? { self[key]?.asDouble }
+    func bool(_ key: String) -> Bool? { self[key]?.asBool }
+    func date(_ key: String) -> Date? { self[key]?.asDate }
+}
+
+extension ISO8601DateFormatter {
+    static let cached: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        // 覆盖最常见 timestamptz 格式（含小数秒）
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+}
 
 
 // 让经纬度支持 "==" 对比，解决 .onChange 报错

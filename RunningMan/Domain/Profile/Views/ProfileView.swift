@@ -23,49 +23,45 @@ struct ProfileView: View {
     @State private var isSavingName = false
 
     @State private var isManagingHonors = false
-    @State private var showAllAchievements = false  // ✅ 新增状态控制 Sheet
+    @State private var showAllAchievements = false
 
-    // ✅ 回退到右图的背景颜色
+    // ✅ 退出确认状态
+    @State private var showSignOutConfirm = false
+
     private let initialBackground = Color(hex: "F2F4F7")
 
     var body: some View {
         NavigationStack {
             ZStack {
-                // 1. 背景层
                 initialBackground.ignoresSafeArea()
 
-                // 2. 内容层
                 ScrollView {
-                    // ✅ 还原右图的间距感：VStack spacing 20
                     VStack(spacing: 20) {
-                        // 头部卡片
                         profileHeader
 
-                        // 错误提示
                         if let err = profileStore.error, !err.isEmpty {
                             errorCard(err)
                         }
 
-                        // 数据项卡片
                         statsSection
 
-                        // 荣誉陈列室
                         achievementsSection
 
-                        // 设置列表
                         settingsSection
 
-                        // 退出按钮
+                        // ✅ 退出按钮
                         if auth.userId != nil {
                             signOutButton
                         }
 
-                        Color.clear.frame(height: 80)
+                        // ✅ 彻底解决 TabBar 误触：
+                        // 这里增加一个巨大的透明占位（140pt），确保“退出登录”永远在 TabBar 之上很远的地方
+                        Color.clear.frame(height: 140)
                     }
                     .padding(20)
                 }
             }
-            .navigationTitle("个人中心")  // 同步右图标题
+            .navigationTitle("个人中心")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarColorScheme(.light, for: .navigationBar)
             .refreshable {
@@ -97,15 +93,25 @@ struct ProfileView: View {
             .onTapGesture {
                 withAnimation { isManagingHonors = false }
             }
+            .confirmationDialog(
+                "确定要退出登录吗？",
+                isPresented: $showSignOutConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("退出登录", role: .destructive) {
+                    Task { await auth.signOut() }
+                }
+                Button("取消", role: .cancel) {}
+            }
         }
     }
 
-    // MARK: - 1. Profile Header (回退 84 尺寸)
+    // MARK: - 1. Profile Header
     private var profileHeader: some View {
         HStack(spacing: 20) {
             ZStack(alignment: .bottomTrailing) {
                 AvatarView(
-                    size: 84,  // ✅ 还原初始尺寸
+                    size: 84,
                     shape: .circle,
                     placeholderSystemName: "person.circle.fill",
                     localPreview: localPreview,
@@ -158,7 +164,6 @@ struct ProfileView: View {
                             .foregroundStyle(.primary)
                             .lineLimit(1)
                             .minimumScaleFactor(0.6)
-
                     }
                     .contentShape(Rectangle())
                     .onLongPressGesture {
@@ -188,34 +193,30 @@ struct ProfileView: View {
                         .padding(.vertical, 4)
                         .background(Color.black.opacity(0.05), in: Capsule())
                 }
-
-                if isSavingAvatar {
-                    Text("更新头像中...").font(.caption2).foregroundStyle(.blue)
-                }
             }
             Spacer()
         }
-        .initialCardStyle()  // ✅ 使用还原后的卡片样式
+        .initialCardStyle()
     }
 
-    // MARK: - 2. Stats Section (绑定真实数据)
+    // MARK: - 2. Stats Section
     private var statsSection: some View {
         HStack(spacing: 12) {
             statItem(
                 title: "场次",
-                value: profileStore.totalGamesString,  // ✅ 真实数据
+                value: profileStore.totalGamesString,
                 unit: "场",
                 icon: "flag.checkered"
             )
             statItem(
                 title: "胜率",
-                value: profileStore.winRateString,  // ✅ 真实数据
+                value: profileStore.winRateString,
                 unit: "%",
                 icon: "chart.line.uptrend.xyaxis"
             )
             statItem(
                 title: "里程",
-                value: profileStore.totalDistanceString,  // ✅ 真实数据
+                value: profileStore.totalDistanceString,
                 unit: "km",
                 icon: "figure.run"
             )
@@ -245,14 +246,14 @@ struct ProfileView: View {
         .initialCardStyle(cornerRadius: 16)
     }
 
-    // MARK: - 3. Achievements (修复版)
+    // MARK: - 3. Achievements (动画修复点)
     private var achievementsSection: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Text("荣誉陈列室").font(.headline).foregroundStyle(.primary)
                 Spacer()
                 Button {
-                    // ✅ 移除 withAnimation，避免干扰子视图的无限循环动画
+                    // 切换管理状态
                     isManagingHonors.toggle()
                 } label: {
                     Text(isManagingHonors ? "完成" : "管理")
@@ -261,14 +262,46 @@ struct ProfileView: View {
                 }
             }
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 20) {
-                    // 1. 遍历展示勋章
-                    ForEach(profileStore.homeAchievements) { item in
-                        AchievementBadge(
-                            item: item,
-                            isEditing: isManagingHonors,
-                            onDelete: {
+            if profileStore.homeAchievements.isEmpty {
+                // ✅ 重新设计的精致占位图
+                HStack {
+                    Spacer()
+                    VStack(spacing: 8) {
+                        Button {
+                            showAllAchievements = true
+                        } label: {
+                            ZStack {
+                                Circle()
+                                    .stroke(
+                                        style: StrokeStyle(
+                                            lineWidth: 1.5,
+                                            dash: [4]
+                                        )
+                                    )
+                                    .foregroundStyle(.gray.opacity(0.3))
+                                    .frame(width: 52, height: 52)  // 尺寸更小巧
+                                Image(systemName: "plus")
+                                    .font(.system(size: 18, weight: .medium))
+                                    .foregroundStyle(.gray.opacity(0.6))
+                            }
+                        }
+                        Text("点击 + 开启荣誉墙").font(.caption2).foregroundStyle(
+                            .secondary.opacity(0.7)
+                        )
+                    }
+                    Spacer()
+                }
+                .padding(.vertical, 10)  // 压缩垂直高度
+            } else {
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 20) {
+                        ForEach(profileStore.homeAchievements) { item in
+                            // ✅ 调用内部组件
+                            AchievementBadge(
+                                item: item,
+                                isEditing: isManagingHonors
+                            ) {
                                 if let dbID = item.dbID {
                                     Task {
                                         await profileStore
@@ -279,183 +312,152 @@ struct ProfileView: View {
                                     }
                                 }
                             }
-                        )
-                    }
-
-                    // 2. 空状态提示
-                    if profileStore.homeAchievements.isEmpty {
-                        Text("点击 + 号展示荣誉")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-
-                    // 3. 加号按钮 (打开 Modal)
-                    Button {
-                        showAllAchievements = true
-                    } label: {
-                        VStack(spacing: 8) {
-                            ZStack {
-                                Circle()
-                                    .fill(Color.gray.opacity(0.05))
-                                    .frame(width: 64, height: 64)
-                                    .overlay(
-                                        Circle()
-                                            .stroke(
-                                                style: StrokeStyle(
-                                                    lineWidth: 1,
-                                                    dash: [4]
-                                                )
-                                            )
-                                            .foregroundStyle(.gray.opacity(0.3))
-                                    )
-                                Image(systemName: "plus")
-                                    .font(.title2)
-                                    .foregroundStyle(.gray)
-                            }
-                            Text("添加")
-                                .font(.caption2)
-                                .foregroundStyle(.clear)  // 保持对齐占位
+                        }
+                        if profileStore.homeAchievements.isEmpty {
+                            Text("点击 + 号展示荣誉").font(.caption).foregroundStyle(
+                                .secondary
+                            )
+                        }
+                        Button {
+                            showAllAchievements = true
+                        } label: {
+                            plusBadgePlaceholder
                         }
                     }
+                    .padding(.all, 10)
                 }
-                .padding(.all, 10)  // 保持 padding 防止阴影被切
             }
         }
         .initialCardStyle(cornerRadius: 20)
-        .sheet(isPresented: $showAllAchievements) {
-            AllAchievementsView()
-        }
+        .sheet(isPresented: $showAllAchievements) { AllAchievementsView() }
     }
 
-    struct AchievementBadge: View {
-            let item: AchievementItem
-            let isEditing: Bool
-            let onDelete: () -> Void
-
-            var body: some View {
-                VStack(spacing: 8) {
-                    ZStack(alignment: .topLeading) {
-
-                        // ——————————————————————————————
-                        // 1. 图标层 (独立动画)
-                        // ——————————————————————————————
-                        ZStack {
-                            Circle()
-                                .fill(item.color.gradient.opacity(0.1))
-                                .frame(width: 64, height: 64)
-                            Image(systemName: item.icon)
-                                .font(.title)
-                                .foregroundStyle(item.color.gradient)
-                        }
-                        // ✅ 旋转逻辑
-                        // 技巧：让它在 -3度 和 3度 之间摆动会更自然
-                        .rotationEffect(.degrees(isEditing ? -3 : 0))
-                        // ✅ 动画绑定：紧贴着 rotationEffect
-                        .animation(
-                            isEditing
-                                ? .linear(duration: 0.14).repeatForever(autoreverses: true)
-                                : .default, // 停止时平滑回正
-                            value: isEditing
-                        )
-
-                        // ——————————————————————————————
-                        // 2. 按钮层 (独立动画)
-                        // ——————————————————————————————
-                        // ✅ 关键修改：用一个 ZStack 包裹按钮，把过渡动画只加在这个 ZStack 上
-                        // 这样就不会影响上面图标的 repeatForever 了
-                        ZStack {
-                            if isEditing {
-                                Button(action: onDelete) {
-                                    Image(systemName: "minus")
-                                        .font(.system(size: 10, weight: .bold))
-                                        .foregroundStyle(.white)
-                                        .padding(6)
-                                        .background(Color.red, in: Circle())
-                                        .overlay(Circle().stroke(.white, lineWidth: 2))
-                                        .shadow(
-                                            color: .black.opacity(0.1),
-                                            radius: 2,
-                                            x: 0,
-                                            y: 1
-                                        )
-                                }
-                                .offset(x: -6, y: -6)
-                                .zIndex(1)
-                                .transition(.scale.combined(with: .opacity))
-                            }
-                        }
-                        // ✅ 这里的动画只作用于按钮的出现/消失
-                        .animation(.easeInOut(duration: 0.2), value: isEditing)
-                    }
-                    // ❌ 之前报错的代码在这一行，我已经删除了。
-                    // 确保这里没有 .animation(...)
-
-                    Text(item.name)
-                        .font(.caption2.bold())
-                        .foregroundStyle(.secondary)
-                }
+    private var plusBadgePlaceholder: some View {
+        VStack(spacing: 8) {
+            ZStack {
+                Circle().fill(Color.gray.opacity(0.05)).frame(
+                    width: 64,
+                    height: 64
+                )
+                .overlay(
+                    Circle().stroke(style: StrokeStyle(lineWidth: 1, dash: [4]))
+                        .foregroundStyle(.gray.opacity(0.3))
+                )
+                Image(systemName: "plus").font(.title2).foregroundStyle(.gray)
             }
+            Text("添加").font(.caption2).foregroundStyle(.clear)
         }
+    }
 
     // MARK: - 4. Settings Section
     private var settingsSection: some View {
         VStack(spacing: 0) {
-            settingRow(icon: "gearshape.fill", title: "通用设置")
-            Divider().background(Color.black.opacity(0.05)).padding(
-                .leading,
-                52
-            )
-            settingRow(icon: "bell.fill", title: "通知管理")
-            Divider().background(Color.black.opacity(0.05)).padding(
-                .leading,
-                52
-            )
-            settingRow(icon: "lock.fill", title: "隐私与权限")
+            Group {
+                settingRow(icon: "gearshape.fill", title: "通用设置", color: .gray)
+                divider
+                settingRow(
+                    icon: "shield.lefthalf.filled",
+                    title: "账号安全",
+                    color: .blue
+                )
+                divider
+                settingRow(icon: "bell.fill", title: "通知管理", color: .red)
+                divider
+                settingRow(icon: "lock.fill", title: "隐私与权限", color: .green)
+            }
+            Rectangle().fill(Color.black.opacity(0.02)).frame(height: 8)
+            Group {
+                // ✅ 修改：重命名为清理缓存，更换图标
+                settingRow(
+                    icon: "trash.fill",
+                    title: "清理缓存",
+                    color: .purple,
+                    value: "2 MB"
+                )
+                divider
+                settingRow(icon: "envelope.fill", title: "意见反馈", color: .orange)
+                divider
+                settingRow(
+                    icon: "info.circle.fill",
+                    title: "关于我们",
+                    color: .cyan,
+                    value: "V 1.0.0"
+                )
+            }
         }
         .initialCardStyle(cornerRadius: 16, padding: 0)
     }
 
-    private func settingRow(icon: String, title: String) -> some View {
+    private var divider: some View {
+        Divider().background(Color.black.opacity(0.05)).padding(.leading, 56)
+    }
+
+    private func settingRow(
+        icon: String,
+        title: String,
+        color: Color,
+        value: String? = nil
+    ) -> some View {
         Button {
         } label: {
             HStack(spacing: 14) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 8, style: .continuous).fill(
-                        Color.black.opacity(0.05)
+                        color
                     )
-                    Image(systemName: icon).font(.footnote).foregroundStyle(
-                        .primary
-                    )
+                    Image(systemName: icon).font(
+                        .system(size: 14, weight: .semibold)
+                    ).foregroundStyle(.white)
                 }
-                .frame(width: 30, height: 30)
+                .frame(width: 32, height: 32)
                 Text(title).font(.subheadline).foregroundStyle(.primary)
                 Spacer()
-                Image(systemName: "chevron.right").font(.caption2)
-                    .foregroundStyle(.secondary.opacity(0.5))
+                if let value = value {
+                    Text(value).font(.caption).foregroundStyle(.secondary)
+                }
+                Image(systemName: "chevron.right").font(
+                    .system(size: 12, weight: .bold)
+                ).foregroundStyle(.secondary.opacity(0.3))
             }
-            .padding(14)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
         }
     }
 
-    // MARK: - 5. Sign Out
+    // MARK: - 5. 退出按钮（带坐标检测的加固版）
     private var signOutButton: some View {
-        Button {
-            Task { await auth.signOut() }
-        } label: {
-            Text("退出登录").font(.subheadline.bold()).foregroundStyle(.red)
-                .frame(maxWidth: .infinity).padding()
-                .background(Color.white)
-                .clipShape(RoundedRectangle(cornerRadius: 16))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16).stroke(
-                        Color.red.opacity(0.2),
-                        lineWidth: 1
+        GeometryReader { proxy in
+            let frame = proxy.frame(in: .global)
+            let screenHeight = UIScreen.main.bounds.height
+            // 🛑 核心阈值：如果按钮底部进入屏幕底部 10x z0 像素以内，认为是被 TabBar 遮挡
+            let isCoveredByTab = frame.maxY > (screenHeight - 100)
+
+            Button {
+                showSignOutConfirm = true
+            } label: {
+                Text("退出登录")
+                    .font(.subheadline.bold())
+                    .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 16)
+                    .background(Color.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16)
+                            .stroke(Color.red.opacity(0.1), lineWidth: 1)
                     )
-                )
+                    // 视觉反馈：在遮挡区域自动变淡，告知用户此处不可点
+                    .opacity(isCoveredByTab ? 0.2 : 1.0)
+                    .scaleEffect(isCoveredByTab ? 0.95 : 1.0)
+            }
+            // ✅ 关键：当按钮在 TabBar 区域时，不响应任何点击，防止穿透误触
+            .allowsHitTesting(!isCoveredByTab)
+            .animation(.spring(), value: isCoveredByTab)
         }
+        .frame(height: 54)  // 必须固定容器高度，否则 ScrollView 布局会坍塌
     }
 
-    // MARK: - Logic Helpers (逻辑全保留)
+    // MARK: - Logic Helpers (全保留)
     private func errorCard(_ text: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(
@@ -489,7 +491,6 @@ struct ProfileView: View {
     private func defaultName(for uid: UUID) -> String {
         "Runner\(uid.uuidString.prefix(4))"
     }
-
     private var displaySubline: String {
         guard let uid = auth.userId else { return "GUEST" }
         return String(uid.uuidString.prefix(8)).uppercased()
@@ -527,20 +528,86 @@ struct ProfileView: View {
             nameFieldFocused = false
         }
     }
+
+    // MARK: - ✅ 勋章组件修复版
+    struct AchievementBadge: View {
+        let item: AchievementItem
+        let isEditing: Bool
+        let onDelete: () -> Void
+
+        // 使用局部私有状态控制晃动，防止被父视图刷新干扰
+        @State private var internalWobble = false
+
+        var body: some View {
+            VStack(spacing: 8) {
+                ZStack(alignment: .topLeading) {
+                    ZStack {
+                        Circle().fill(item.color.gradient.opacity(0.1)).frame(
+                            width: 64,
+                            height: 64
+                        )
+                        Image(systemName: item.icon).font(.title)
+                            .foregroundStyle(item.color.gradient)
+                    }
+                    // ✅ 修复点：使用 internalWobble 驱动，确保动画持续
+                    .rotationEffect(
+                        .degrees(isEditing ? (internalWobble ? -2.5 : 2.5) : 0)
+                    )
+                    .onChange(of: isEditing) { _, newValue in
+                        if newValue {
+                            startAnimation()
+                        } else {
+                            internalWobble = false
+                        }
+                    }
+                    .onAppear {
+                        if isEditing { startAnimation() }
+                    }
+
+                    if isEditing {
+                        Button(action: onDelete) {
+                            Image(systemName: "minus").font(
+                                .system(size: 10, weight: .bold)
+                            ).foregroundStyle(.white)
+                                .padding(6).background(Color.red, in: Circle())
+                                .overlay(Circle().stroke(.white, lineWidth: 2))
+                        }
+                        .offset(x: -6, y: -6)
+                        .transition(.scale.combined(with: .opacity))
+                    }
+                }
+                Text(item.name).font(.caption2.bold()).foregroundStyle(
+                    .secondary
+                )
+            }
+        }
+
+        private func startAnimation() {
+            // 使用线性无限循环，确保晃动手感丝滑
+            withAnimation(
+                .linear(duration: 0.12).repeatForever(autoreverses: true)
+            ) {
+                internalWobble = true
+            }
+        }
+    }
+
 }
 
-// MARK: - ✅ 视觉回退核心修饰符
+// MARK: - Preview
+#Preview {
+    ProfileView().environment(AuthStore()).environment(ProfileStore())
+}
+
+// MARK: - Modifier
 struct InitialCardModifier: ViewModifier {
     var cornerRadius: CGFloat
     var padding: CGFloat
     func body(content: Content) -> some View {
-        content
-            .padding(padding)
-            .background(Color.white)
+        content.padding(padding).background(Color.white)
             .clipShape(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
             )
-            // ✅ 回退到深邃扩散投影
             .shadow(color: Color.black.opacity(0.08), radius: 10, x: 0, y: 5)
     }
 }
