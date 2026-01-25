@@ -63,80 +63,44 @@ YouTube:  https://youtu.be/3V1tW2nbBYw
 
 <img width="1219" height="590" alt="System Architecture" src="https://github.com/user-attachments/assets/1ff04d3c-208f-428c-89b8-cb5068b469d5" />
 
-### 📱 iOS Client
+### 📱 iOS App
 
-- **语言**：Swift 6.2  
-- **最低系统**：iOS 26  
-- **开发环境**：Xcode 26  
+- **UI 框架**：SwiftUI  
+- **开发语言**：Swift 6.2  
+- **运行系统**：iOS 26（开发版本）  
+- **开发环境**：Xcode 26
 
 **核心实现：**
 
-- **SwiftUI**
-  - 使用 Observation 框架实现状态驱动 UI
-  - 单一数据源（SSOT）设计，确保界面与逻辑一致
+iOS 端基于 SwiftUI 构建，使用 Observation 框架实现状态驱动 UI，并通过单一数据源（SSOT）保证界面状态与业务逻辑的一致性。地图与定位部分使用 MapKit 与 CoreLocation，并针对国内环境进行了坐标纠偏处理。
 
-- **地图与定位**
-  - MapKit + CoreLocation
-  - 适配国内环境的坐标纠偏处理
+整体架构采用 MVVM 结合领域分层的设计方式，通过状态机管理游戏在大厅、对局和结算等阶段之间的流转。
 
-- **架构设计**
-  - MVVM + Domain 分层
-  - 基于状态机管理游戏阶段（Lobby / Playing / Finished）
 
 ---
 
 ### ☁️ Backend（Supabase）
 
-后端采用 Supabase，核心思路为：  
-**Database as Referee（数据库即裁判）**
+后端基于 Supabase 构建，整体采用「Database as Referee（数据库即裁判）」的设计思路。客户端只负责展示与交互，所有会影响对局结果的关键规则均由服务器统一裁决。
 
-客户端只负责展示与交互，关键规则由服务器统一裁决。
+用户登录采用邮箱 Magic Link，将注册与登录流程合并以降低使用门槛。实时部分使用 Supabase Realtime，同步玩家在线状态与位置信息，以保证对局过程的流畅性，并支持掉线检测与重连。
 
-#### 🔐 Auth
-
-- Magic Link（邮箱免密登录）
-- 登录与注册流程合并，降低使用门槛
-
-#### 🔄 Realtime
-
-- **Broadcast**
-  - 用于高频位置同步
-  - 提升追逐过程的流畅度
-
-- **Presence**
-  - 在线状态维护
-  - 支持掉线检测与重连
-
-#### ⚖️ 逻辑裁决（Postgres RPC）
-
-- 关键行为通过数据库 RPC 执行：
-  - `attempt_tag`（抓捕判定）
-  - `use_item`（道具使用）
-- 所有判定在事务中完成，保证数据一致性
-
-- 使用 **PostGIS**
-  - 服务器端距离计算
-  - 范围扫描与判定
+抓捕判定与道具使用等关键逻辑通过 Postgres RPC 在数据库事务中完成，并结合 PostGIS 在服务器端进行距离与范围计算，从而避免客户端自行判定带来的不一致问题。
 
 ---
 
 ## 📂 文档说明
 
-项目相关设计文档位于 `docs/` 目录，包括：
+项目相关设计文档已整理并直接上传，主要包括以下内容：
 
-- **产品设计文档**
-  - 设计背景
-  - 核心玩法
-  - 使用流程
+- **产品设计文档**  
+  [RunningMan - 产品设计.pdf](https://github.com/user-attachments/files/24842040/RunningMan.-.pdf)  
+  包含设计背景、核心玩法与整体使用流程说明。
 
-- **客户端设计说明**
-  - 架构分层
-  - 状态管理
-  - 代码组织方式
+- **客户端设计说明**  
+  [RunningMan - iOS 架构设计.pdf](https://github.com/user-attachments/files/24842037/RunningMan.-.iOS.pdf)  
+  说明 iOS 客户端的整体架构分层、状态管理方式以及主要模块的组织思路。
 
-- **后端设计**
-  - 数据库结构
-  - 状态模型
-  - RPC 接口说明
-
----
+- **后端与数据库设计**  
+  [RunningMan - 后端与数据库设计.pdf](https://github.com/user-attachments/files/24842039/RunningMan.-.pdf)  
+  包含数据库结构、多层状态模型以及裁判级 RPC 的设计说明。
