@@ -1,7 +1,6 @@
 # 🏃💨 RunningMan
 
 基于真实地理位置（LBS）的 iOS 多人实时对抗游戏  
-**Real-time Multiplayer LBS Tag Game for iOS**
 
 ![Swift](https://img.shields.io/badge/Swift-6.2-orange)
 ![iOS](https://img.shields.io/badge/iOS-26-blue)
@@ -35,7 +34,7 @@ YouTube:  https://youtu.be/3V1tW2nbBYw
 
 - **Hunters（追捕者）**
 - **Runners（逃脱者）**
-- **Observer（观察者）**
+- **Spectator（观察者）**
 
 追捕者与逃脱者在限定区域内进行对抗，观察者可以全程旁观对局。
 
